@@ -193,12 +193,7 @@ Start-Sleep -Seconds 3
 
 # Detect the primary monitor's real (DPI-unscaled) resolution for fullscreen.
 $HaloRes = ""
-try {
-    Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class OrDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i); }' -ErrorAction SilentlyContinue
-    [void][OrDpi]::SetProcessDPIAware()
-    $w = [OrDpi]::GetSystemMetrics(0); $h = [OrDpi]::GetSystemMetrics(1)
-    if ($w -gt 0 -and $h -gt 0) { $HaloRes = "${w}x${h}" }
-} catch {}
+try { $HaloRes = (& (Join-Path $PSScriptRoot "detect_res.ps1") | Select-Object -Last 1).Trim() } catch {}
 if ($HaloRes) { Write-Host "[OpenRaven] Monitor resolution: $HaloRes (fullscreen)" -ForegroundColor Cyan }
 
 $VkWinProc = $null

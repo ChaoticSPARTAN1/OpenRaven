@@ -1,0 +1,59 @@
+#version 450
+// Helper passes for the in-game Vulkan U-Net (ravenvk.c). No 16-bit features: fp16 packed in uints.
+// Tensors: fp16 channels-last, 1-pixel zero border (padded width = w + 2). Frame buffers: RGBA16F,
+// rows bottom-up (GL order) for the input, top-down (torch order = nn_full texture rows) for the output.
+//   MODE 1 UNSHUF: frame (W x H) -> 2x2 pixel-unshuffle tensor, 16 ch (c*4 + dy*2 + dx; 12..15 = 0)
+//   MODE 2 UPCAT : concat(nearest-up(src0) cropped, src1), copies 8 channels (uvec4) per thread
+//   MODE 3 SHUF  : last tensor (12 ch at half res) -> full-res residual RGB, alpha = input's 3x3 contrast
+layout(push_constant) uniform PC { uint W, H, C0, C1, P0, P1, PO; } pc;
+#if MODE == 1
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) readonly buffer Ib { uvec2 img[]; };
+layout(set = 0, binding = 2) writeonly buffer Ob { uvec4 T[]; };
+vec4 px(uint x, uint y) { uvec2 u = img[(pc.H - 1 - y) * pc.W + x]; return vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y)); }
+void main() {
+    uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;   // half-res pixel
+    if (x >= pc.W / 2 || y >= pc.H / 2) return;
+    vec3 q[4];
+    for (uint k = 0; k < 4; k++) q[k] = px(2 * x + k % 2, 2 * y + k / 2).rgb;
+    float v[16];
+    for (uint c = 0; c < 3; c++) for (uint k = 0; k < 4; k++) v[c * 4 + k] = q[k][c];
+    for (uint c = 12; c < 16; c++) v[c] = 0.0;
+    uint o = ((y + 1) * pc.PO + x + 1) * 2;
+    T[o] = uvec4(packHalf2x16(vec2(v[0], v[1])), packHalf2x16(vec2(v[2], v[3])), packHalf2x16(vec2(v[4], v[5])), packHalf2x16(vec2(v[6], v[7])));
+    T[o + 1] = uvec4(packHalf2x16(vec2(v[8], v[9])), packHalf2x16(vec2(v[10], v[11])), 0u, 0u);
+}
+#elif MODE == 2
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) readonly buffer Ab { uvec4 S0[]; };
+layout(set = 0, binding = 1) readonly buffer Bb { uvec4 S1[]; };
+layout(set = 0, binding = 2) writeonly buffer Ob { uvec4 T[]; };
+void main() {   // W, H = output size; C0, C1 = channels (multiples of 16)
+    uint C = (pc.C0 + pc.C1) / 8, c0 = pc.C0 / 8, c1 = pc.C1 / 8, i = gl_GlobalInvocationID.x, c = i % C, p = i / C;
+    if (p >= pc.W * pc.H) return;
+    uint x = p % pc.W, y = p / pc.W;
+    T[((y + 1) * pc.PO + x + 1) * C + c] = c < c0 ? S0[((y / 2 + 1) * pc.P0 + x / 2 + 1) * c0 + c]
+                                                   : S1[((y + 1) * pc.P1 + x + 1) * c1 + c - c0];
+}
+#elif MODE == 3
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) readonly buffer Ab { uint R[]; };        // last tensor, 16 ch -> 8 uints per pixel
+layout(set = 0, binding = 1) readonly buffer Ib { uvec2 img[]; };
+layout(set = 0, binding = 2) writeonly buffer Ob { uvec2 outp[]; };
+float ch(uint o, uint c) { return unpackHalf2x16(R[o + c / 2])[c & 1]; }
+void main() {   // W, H = full size; P0 = padded width of R
+    uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
+    if (x >= pc.W || y >= pc.H) return;
+    uint o = ((y / 2 + 1) * pc.P0 + x / 2 + 1) * 8, s = (y % 2) * 2 + x % 2;
+    vec3 r = vec3(ch(o, s), ch(o, 4 + s), ch(o, 8 + s));
+    vec3 lo = vec3(1e9), hi = vec3(-1e9);
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+        int xx = int(x) + i, yy = int(y) + j;
+        if (xx < 0 || yy < 0 || xx >= int(pc.W) || yy >= int(pc.H)) continue;
+        uvec2 u = img[(pc.H - 1 - uint(yy)) * pc.W + uint(xx)];
+        vec3 c = vec3(unpackHalf2x16(u.x), unpackHalf2x16(u.y).x); lo = min(lo, c); hi = max(hi, c);
+    }
+    vec3 g = hi - lo;
+    outp[y * pc.W + x] = uvec2(packHalf2x16(r.xy), packHalf2x16(vec2(r.z, max(g.r, max(g.g, g.b)))));
+}
+#endif

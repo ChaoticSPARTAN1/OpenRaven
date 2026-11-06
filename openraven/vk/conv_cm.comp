@@ -1,0 +1,80 @@
+#version 450
+// 3x3 conv with VK_KHR_cooperative_matrix (matrix cores). Same as conv2.comp but every size is a
+// specialization constant, so one SPIR-V file serves all layers (shipped inside ravengfx.so).
+// Tensors: fp16 channels-last, 1-pixel zero border. Weights: fp16 [tap][kc][nb][16 in][16 out], bias fp32.
+// Build twice: -DACC16=1 (fp16 accumulate) and -DACC16=0.
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_basic : require
+layout(constant_id = 0) const int CIN = 64;
+layout(constant_id = 1) const int COUT = 64;
+layout(constant_id = 2) const int STRIDE = 1;
+layout(constant_id = 3) const int MT = 2;       // 16-pixel tiles per subgroup
+layout(constant_id = 4) const int NBS = 4;      // 16-channel output blocks per workgroup (dispatch z = NB / NBS)
+layout(constant_id = 5) const int RELU = 1;
+layout(constant_id = 6) const int SG = 32;      // subgroup size (= local_size_x)
+#if ACC16
+#define ACCT float16_t
+#else
+#define ACCT float
+#endif
+const int KC = CIN / 16, NB = COUT / 16, ROWS = 4, TAPW8 = KC * NB * 32;   // TAPW8 = one tap's weights in uvec4s
+layout(local_size_x_id = 6, local_size_y = 4) in;
+layout(push_constant) uniform PC { uint OW, OH, IPW, OPW; } pc;
+layout(set = 0, binding = 0) readonly buffer Xb { float16_t X[]; };
+layout(set = 0, binding = 1) readonly buffer Wb { uvec4 Wv[]; };
+layout(set = 0, binding = 2) readonly buffer Bb { float Bias[]; };
+layout(set = 0, binding = 3) buffer Yb { float16_t Y[]; };
+shared uvec4 shW[TAPW8];
+shared ACCT shBias[16 * COUT];
+shared float16_t shOut[ROWS * 16 * NBS * 16];
+#define CM(T, U) coopmat<T, gl_ScopeSubgroup, 16, 16, U>
+
+void main()
+{
+    uint tid = gl_LocalInvocationIndex, r = gl_LocalInvocationID.y, nth = SG * ROWS;
+    uint oy = min(gl_WorkGroupID.y * ROWS + r, pc.OH - 1);
+    uint ox0 = gl_WorkGroupID.x * (16 * MT), n0 = gl_WorkGroupID.z * NBS;
+    for (uint e = tid; e < 16 * COUT; e += nth) shBias[e] = ACCT(Bias[e % COUT]);
+    barrier();
+    CM(ACCT, gl_MatrixUseAccumulator) acc[MT][NBS];
+    for (int n = 0; n < NBS; n++) {
+        CM(ACCT, gl_MatrixUseAccumulator) b0;
+        coopMatLoad(b0, shBias, (n0 + n) * 16, COUT, gl_CooperativeMatrixLayoutRowMajor);
+        for (int m = 0; m < MT; m++) acc[m][n] = b0;
+    }
+    for (uint t = 0; t < 9; t++) {
+        barrier();
+        for (uint e = tid; e < TAPW8; e += nth) shW[e] = Wv[t * TAPW8 + e];
+        barrier();
+        uint base = ((oy * STRIDE + t / 3) * pc.IPW + ox0 * STRIDE + t % 3) * CIN;
+        for (uint k = 0; k < KC; k++) {
+            CM(float16_t, gl_MatrixUseA) a[MT];
+            for (int m = 0; m < MT; m++)
+                coopMatLoad(a[m], X, base + m * 16 * STRIDE * CIN + k * 16, STRIDE * CIN, gl_CooperativeMatrixLayoutRowMajor);
+            for (int n = 0; n < NBS; n++) {
+                CM(float16_t, gl_MatrixUseB) b;
+                coopMatLoad(b, shW, (k * NB + n0 + n) * 32, 2, gl_CooperativeMatrixLayoutRowMajor);
+                for (int m = 0; m < MT; m++) acc[m][n] = coopMatMulAdd(a[m], b, acc[m][n]);
+            }
+        }
+    }
+    uint lane = gl_LocalInvocationID.x;
+    for (int m = 0; m < MT; m++) {
+        for (int n = 0; n < NBS; n++) {
+            CM(float16_t, gl_MatrixUseAccumulator) h = CM(float16_t, gl_MatrixUseAccumulator)(acc[m][n]);
+            coopMatStore(h, shOut, r * 16 * NBS * 16 + n * 16, NBS * 16, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        subgroupMemoryBarrierShared(); subgroupBarrier();
+        uint dst = ((oy + 1) * pc.OPW + ox0 + m * 16 + 1) * COUT + n0 * 16;
+        for (uint e = lane; e < 16 * NBS * 16; e += SG) {
+            float16_t v = shOut[r * 16 * NBS * 16 + e];
+            if (RELU != 0) v = max(v, float16_t(0));
+            uint px = e / (NBS * 16);
+            if (ox0 + m * 16 + px < pc.OW) Y[dst + px * COUT + e % (NBS * 16)] = v;
+        }
+        subgroupMemoryBarrierShared(); subgroupBarrier();
+    }
+}

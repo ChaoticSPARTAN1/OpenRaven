@@ -1,0 +1,48 @@
+#version 450
+// 3x3 conv for any Vulkan GPU (no matrix cores, no 16-bit features): fp32 math, fp16 data packed in
+// uints (2 channels each). Same tensor / weight layout as conv_cm.comp. Each thread = one output pixel x
+// COB output channels; a tap's weights for this channel group are staged in shared memory as fp32.
+layout(constant_id = 0) const int CIN = 64;
+layout(constant_id = 1) const int COUT = 64;
+layout(constant_id = 2) const int STRIDE = 1;
+layout(constant_id = 3) const int COB = 16;     // output channels per thread (dispatch z = COUT / COB)
+layout(constant_id = 4) const int RELU = 1;
+const int KC = CIN / 16, NB = COUT / 16;
+layout(local_size_x = 16, local_size_y = 8) in;
+layout(push_constant) uniform PC { uint OW, OH, IPW, OPW; } pc;
+layout(set = 0, binding = 0) readonly buffer Xb { uint X[]; };
+layout(set = 0, binding = 1) readonly buffer Wb { uint Wp[]; };
+layout(set = 0, binding = 2) readonly buffer Bb { float Bias[]; };
+layout(set = 0, binding = 3) buffer Yb { uint Y[]; };
+shared float shW[CIN * COB];
+
+void main()
+{
+    uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y, c0 = gl_WorkGroupID.z * COB;
+    uint tid = gl_LocalInvocationIndex;
+    bool live = x < pc.OW && y < pc.OH;
+    float acc[COB];
+    for (int o = 0; o < COB; o++) acc[o] = Bias[c0 + o];
+    for (uint t = 0; t < 9; t++) {
+        barrier();
+        for (uint e = tid; e < CIN * COB; e += 128) {          // shW[ci][o] = W[t][ci][c0 + o]
+            uint ci = e / COB, co = c0 + e % COB;
+            uint h = ((t * KC + ci / 16) * NB + co / 16) * 256 + (ci % 16) * 16 + co % 16;
+            shW[e] = unpackHalf2x16(Wp[h >> 1])[h & 1];
+        }
+        barrier();
+        if (!live) continue;
+        uint base = ((y * STRIDE + t / 3) * pc.IPW + x * STRIDE + t % 3) * (CIN / 2);
+        for (int ci = 0; ci < CIN; ci += 2) {
+            vec2 v = unpackHalf2x16(X[base + ci / 2]);
+            for (int o = 0; o < COB; o++) acc[o] += v.x * shW[ci * COB + o] + v.y * shW[(ci + 1) * COB + o];
+        }
+    }
+    if (!live) return;
+    uint dst = ((y + 1) * pc.OPW + x + 1) * (COUT / 2) + c0 / 2;
+    for (int o = 0; o < COB; o += 2) {
+        vec2 v = vec2(acc[o], acc[o + 1]);
+        if (RELU != 0) v = max(v, vec2(0));
+        Y[dst + o / 2] = packHalf2x16(v);
+    }
+}

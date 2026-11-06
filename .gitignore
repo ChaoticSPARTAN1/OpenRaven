@@ -1,0 +1,28 @@
+# Ignore extracted game files and dumps (user-supplied via start_linux.sh / start_windows.bat)
+/pm/
+*.zip
+*.rar
+*.7z
+*.imgc
+*.tar.gz
+
+# Runtime logs, temp files, and build objects
+openraven/run_logs/
+openraven/vk/ravenvk_win.exe
+openraven/fsr2/obj/
+openraven/fsr2/libfsr2gl.a
+openraven/vk/spv/
+openraven/vk/ref6/
+openraven/vk/ref6s/
+openraven/vk/*.spv
+openraven/vk/cmprops
+openraven/vk/convtest
+openraven/vk/nnrun
+openraven/vk/vkcheck
+openraven/neural/__pycache__/
+openraven/neural/*.pt
+openraven/neural/*.bin
+openraven/neural/*.log
+*.o
+*~
+.DS_Store

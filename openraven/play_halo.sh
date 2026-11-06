@@ -32,8 +32,10 @@ fi
 # Resolution: command-line WxH wins, then graphics.ini `resolution` (WxH or "native"), else 1920x1080.
 RES="${1:-${HALO_RES:-$(gfx resolution 1920x1080)}}"
 if [ "$RES" = native ]; then
-  RES=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2; exit}')
-  [ -z "$RES" ] && RES=$(xrandr 2>/dev/null | awk '/\*/{print $1; exit}')
+  # In WSLg, xrandr reports active monitor resolution while xdpyinfo often reports unscaled 640x480
+  RES=$(xrandr 2>/dev/null | grep '\*' | awk '{print $1; exit}')
+  [ -z "$RES" ] && RES=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2; exit}')
+  [ "$RES" = 640x480 ] && RES=1920x1080
   RES="${RES:-1920x1080}"
 fi
 CMD=(env LD_PRELOAD="$PRELOAD" ./game)
@@ -60,8 +62,22 @@ boost_volume() {
 }
 boost_volume &
 
-# Fullscreen: default on under WSL (WSLg opens a normal window); on Linux set HALO_FULLSCREEN=1.
+# Fullscreen: on WSL, ravengfx applies borderless windowing to prevent FreeRDP RAIL unmap bugs.
+# On native Linux, apply EWMH fullscreen via wmctrl.
 make_fullscreen() {
+  if [ "$IS_WSL" = 1 ]; then
+    command -v xprop >/dev/null 2>&1 || return 0
+    for _ in $(seq 1 30); do
+      sleep 1
+      if command -v xdotool >/dev/null 2>&1; then
+        for w in $(xdotool search --onlyvisible . 2>/dev/null); do
+          xprop -id "$w" -f _MOTIF_WM_HINTS 32c -set _MOTIF_WM_HINTS "0x2, 0x0, 0x0, 0x0, 0x0" 2>/dev/null || true
+          xdotool windowmove "$w" 0 0 windowsize "$w" 1920 1080 2>/dev/null || true
+        done
+      fi
+    done
+    return 0
+  fi
   command -v wmctrl >/dev/null 2>&1 || return 0
   for _ in $(seq 1 60); do
     sleep 1
@@ -69,12 +85,6 @@ make_fullscreen() {
     for w in $(wmctrl -l 2>/dev/null | awk '{print $1}'); do
       wmctrl -i -r "$w" -b add,fullscreen 2>/dev/null && return 0
     done
-    # Fallback for WSLg/Weston (which doesn't implement _NET_CLIENT_LIST)
-    if command -v xdotool >/dev/null 2>&1; then
-      for w in $(xdotool search --onlyvisible . 2>/dev/null); do
-        wmctrl -i -r "$w" -b add,fullscreen 2>/dev/null && return 0
-      done
-    fi
   done
 }
 [ "${HALO_FULLSCREEN:-$IS_WSL}" = 1 ] && make_fullscreen &
@@ -119,6 +129,7 @@ bwrap --tmpfs / \
   --setenv RIO2PAD_SKIPBOOT "${RIO2PAD_SKIPBOOT:-1}" \
   ${HALO_GAME:+--ro-bind "$HALO_GAME" /pm/g7/halo/game} \
   --setenv LIBGL_ALWAYS_SOFTWARE "${HALO_SW:-0}" \
+  --setenv IS_WSL "$IS_WSL" \
   ${GALLIUM_DRIVER:+--setenv GALLIUM_DRIVER "$GALLIUM_DRIVER"} \
   ${MESA_D3D12_DEFAULT_ADAPTER_NAME:+--setenv MESA_D3D12_DEFAULT_ADAPTER_NAME "$MESA_D3D12_DEFAULT_ADAPTER_NAME"} \
   ${HALO_FULLSCREEN:+--setenv HALO_FULLSCREEN "$HALO_FULLSCREEN"} \

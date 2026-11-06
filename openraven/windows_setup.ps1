@@ -220,6 +220,23 @@ public class XInputBridge {
 
 Write-Step "Starting WSL2 environment and launching OpenRaven..."
 
+# Clean up any lingering game/bwrap processes or ravenvk_win from interrupted runs
+Get-Process -Name "ravenvk_win" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+try { & wsl.exe -d Ubuntu -e bash -c "killall -9 game bwrap 2>/dev/null || true" } catch {}
+
+# Verify WSLg GUI display server is responsive; refresh WSL if wedged or requested
+$guiHealthy = $false
+try {
+    $check = & wsl.exe -d Ubuntu -e bash -c "timeout 2 xset q >/dev/null 2>&1 && echo OK"
+    if ($check -match "OK") { $guiHealthy = $true }
+} catch {}
+
+if (-not $guiHealthy -or ($GameArgs -contains "--reboot-wsl") -or ($GameArgs -contains "-r")) {
+    Write-Host "[OpenRaven] WSLg display server is unresponsive or refresh requested. Restarting WSL..." -ForegroundColor Yellow
+    & wsl.exe --shutdown
+    Start-Sleep -Seconds 1
+}
+
 $wslEnvList = [System.Collections.Generic.List[string]]::new()
 
 # Detect active discrete/display GPU for Mesa D3D12 hardware acceleration under WSLg
@@ -283,6 +300,8 @@ try {
     if ($VkWinProc -and -not $VkWinProc.HasExited) {
         Stop-Process -Id $VkWinProc.Id -Force -ErrorAction SilentlyContinue
     }
+    Get-Process -Name "ravenvk_win" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Stop-Job $XInputJob -ErrorAction SilentlyContinue
     Remove-Job $XInputJob -Force -ErrorAction SilentlyContinue
+    try { & wsl.exe -d Ubuntu -e bash -c "killall -9 game bwrap 2>/dev/null || true" } catch {}
 }

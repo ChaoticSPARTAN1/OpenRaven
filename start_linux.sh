@@ -188,7 +188,9 @@ chmod +x "$ROOT/pm/g7/halo/game" 2>/dev/null || true
 chmod 755 "$ROOT/pm/g7/halo/game" "$ROOT/pm/g7/halo/halo.so" "$ROOT/openraven/"*.sh 2>/dev/null || true
 
 # 4. Build OpenRaven shims if needed (or if source is newer)
-if [ ! -f "$ROOT/openraven/rio2pad.so" ] || [ ! -f "$ROOT/openraven/ravengfx.so" ]; then
+if [ ! -f "$ROOT/openraven/rio2pad.so" ] || [ ! -f "$ROOT/openraven/ravengfx.so" ] || \
+   [ "$ROOT/openraven/ravengfx.c" -nt "$ROOT/openraven/ravengfx.so" ] || \
+   [ "$ROOT/openraven/rio2pad.c" -nt "$ROOT/openraven/rio2pad.so" ]; then
   echo "[OpenRaven] Building shims (rio2pad.so, ravengfx.so)..."
   "$ROOT/openraven/build.sh"
 fi

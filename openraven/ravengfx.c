@@ -347,7 +347,7 @@ static void hook_tanf(void)
 static void try_set_fullscreen(void *cd_ptr, unsigned long cdr_win)
 {
     static int attempts = 0;
-    if (attempts >= 10 || !cd_ptr || !cdr_win) return;
+    if (attempts >= 5 || !cd_ptr || !cdr_win) return;
     const char *fs = getenv("HALO_FULLSCREEN");
     if (!fs) fs = lookup("fullscreen");
     if (fs && (!strcmp(fs, "0") || !strcasecmp(fs, "off") || !strcasecmp(fs, "false"))) {
@@ -363,45 +363,87 @@ static void try_set_fullscreen(void *cd_ptr, unsigned long cdr_win)
     typedef unsigned long (*pfn_XDefaultRootWindow)(void *);
     typedef int (*pfn_XSendEvent)(void *, unsigned long, int, long, void *);
     typedef int (*pfn_XFlush)(void *);
+    typedef int (*pfn_XDefaultScreen)(void *);
+    typedef int (*pfn_XDisplayWidth)(void *, int);
+    typedef int (*pfn_XDisplayHeight)(void *, int);
+    typedef int (*pfn_XMoveResizeWindow)(void *, unsigned long, int, int, unsigned int, unsigned int);
+    typedef int (*pfn_XChangeProperty)(void *, unsigned long, unsigned long, unsigned long, int, int, const unsigned char *, int);
 
     pfn_XInternAtom pXInternAtom = (pfn_XInternAtom)dlsym(x11, "XInternAtom");
     pfn_XDefaultRootWindow pXDefaultRootWindow = (pfn_XDefaultRootWindow)dlsym(x11, "XDefaultRootWindow");
     pfn_XSendEvent pXSendEvent = (pfn_XSendEvent)dlsym(x11, "XSendEvent");
     pfn_XFlush pXFlush = (pfn_XFlush)dlsym(x11, "XFlush");
+    pfn_XDefaultScreen pXDefaultScreen = (pfn_XDefaultScreen)dlsym(x11, "XDefaultScreen");
+    pfn_XDisplayWidth pXDisplayWidth = (pfn_XDisplayWidth)dlsym(x11, "XDisplayWidth");
+    pfn_XDisplayHeight pXDisplayHeight = (pfn_XDisplayHeight)dlsym(x11, "XDisplayHeight");
+    pfn_XMoveResizeWindow pXMoveResizeWindow = (pfn_XMoveResizeWindow)dlsym(x11, "XMoveResizeWindow");
+    pfn_XChangeProperty pXChangeProperty = (pfn_XChangeProperty)dlsym(x11, "XChangeProperty");
 
-    if (!pXInternAtom || !pXDefaultRootWindow || !pXSendEvent || !pXFlush) return;
+    if (!pXInternAtom || !pXFlush) return;
 
-    unsigned long wm_state = pXInternAtom(cd_ptr, "_NET_WM_STATE", 0);
-    unsigned long wm_fullscreen = pXInternAtom(cd_ptr, "_NET_WM_STATE_FULLSCREEN", 0);
-    if (!wm_state || !wm_fullscreen) return;
+    const char *is_wsl_env = getenv("IS_WSL");
+    int is_wsl = (is_wsl_env && atoi(is_wsl_env) != 0) || access("/mnt/wslg", F_OK) == 0;
 
-    struct {
-        int type;
-        unsigned long serial;
-        int send_event;
-        void *display;
-        unsigned long window;
-        unsigned long message_type;
-        int format;
-        long data[5];
-    } xev;
-    memset(&xev, 0, sizeof(xev));
-    xev.type = 33; // ClientMessage
-    xev.window = cdr_win;
-    xev.message_type = wm_state;
-    xev.format = 32;
-    xev.data[0] = 1; // _NET_WM_STATE_ADD
-    xev.data[1] = (long)wm_fullscreen;
-    xev.data[2] = 0;
-    xev.data[3] = 1; // normal application
+    if (is_wsl) {
+        // Under WSLg (Weston FreeRDP RAIL backend), _NET_WM_STATE_FULLSCREEN causes Weston
+        // to unmap or hide the window from the Windows desktop. To achieve borderless fullscreen
+        // without dropping out of RAIL, strip decorations via _MOTIF_WM_HINTS and resize to screen.
+        if (pXChangeProperty) {
+            unsigned long motif_hints = pXInternAtom(cd_ptr, "_MOTIF_WM_HINTS", 0);
+            if (motif_hints) {
+                // flags = MWM_HINTS_DECORATIONS (2), decorations = 0 (none)
+                unsigned long hints[5] = { 2, 0, 0, 0, 0 };
+                pXChangeProperty(cd_ptr, cdr_win, motif_hints, motif_hints, 32, 0 /* PropModeReplace */, (const unsigned char *)hints, 5);
+            }
+        }
+        if (pXMoveResizeWindow && pXDefaultScreen && pXDisplayWidth && pXDisplayHeight) {
+            int scr = pXDefaultScreen(cd_ptr);
+            int sw = pXDisplayWidth(cd_ptr, scr);
+            int sh = pXDisplayHeight(cd_ptr, scr);
+            if (sw <= 640 && ravengfx_win_w > sw) sw = ravengfx_win_w;
+            if (sh <= 480 && ravengfx_win_h > sh) sh = ravengfx_win_h;
+            pXMoveResizeWindow(cd_ptr, cdr_win, 0, 0, (unsigned int)sw, (unsigned int)sh);
+        }
+        pXFlush(cd_ptr);
+        attempts++;
+        if (attempts == 1) {
+            fprintf(stderr, "[ravengfx] applied borderless window for WSLg on window 0x%lx\n", cdr_win);
+        }
+    } else {
+        // Native Linux: standard EWMH _NET_WM_STATE_FULLSCREEN
+        if (!pXDefaultRootWindow || !pXSendEvent) return;
+        unsigned long wm_state = pXInternAtom(cd_ptr, "_NET_WM_STATE", 0);
+        unsigned long wm_fullscreen = pXInternAtom(cd_ptr, "_NET_WM_STATE_FULLSCREEN", 0);
+        if (!wm_state || !wm_fullscreen) return;
 
-    unsigned long root = pXDefaultRootWindow(cd_ptr);
-    long mask = (1L << 17) | (1L << 19); // SubstructureNotifyMask | SubstructureRedirectMask
-    pXSendEvent(cd_ptr, root, 0, mask, &xev);
-    pXFlush(cd_ptr);
-    attempts++;
-    if (attempts == 1) {
-        fprintf(stderr, "[ravengfx] requested X11 fullscreen on window 0x%lx\n", cdr_win);
+        struct {
+            int type;
+            unsigned long serial;
+            int send_event;
+            void *display;
+            unsigned long window;
+            unsigned long message_type;
+            int format;
+            long data[5];
+        } xev;
+        memset(&xev, 0, sizeof(xev));
+        xev.type = 33; // ClientMessage
+        xev.window = cdr_win;
+        xev.message_type = wm_state;
+        xev.format = 32;
+        xev.data[0] = 1; // _NET_WM_STATE_ADD
+        xev.data[1] = (long)wm_fullscreen;
+        xev.data[2] = 0;
+        xev.data[3] = 1; // normal application
+
+        unsigned long root = pXDefaultRootWindow(cd_ptr);
+        long mask = (1L << 17) | (1L << 19); // SubstructureNotifyMask | SubstructureRedirectMask
+        pXSendEvent(cd_ptr, root, 0, mask, &xev);
+        pXFlush(cd_ptr);
+        attempts++;
+        if (attempts == 1) {
+            fprintf(stderr, "[ravengfx] requested X11 fullscreen on window 0x%lx\n", cdr_win);
+        }
     }
 }
 

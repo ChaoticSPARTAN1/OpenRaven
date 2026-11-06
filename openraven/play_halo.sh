@@ -19,7 +19,7 @@ PRELOAD="/pm/g7/halo/halo.so /pm/g7/rio2pad.so /pm/g7/ravengfx.so"
 # Graphics settings (resolution, AA, anisotropy, FPS, ...): see graphics.ini.
 . "$OUT/graphics.sh"
 # Resolution: command-line WxH wins, then graphics.ini `resolution` (WxH or "native"), else 1920x1080.
-RES="${1:-$(gfx resolution 1920x1080)}"
+RES="${1:-${HALO_RES:-$(gfx resolution 1920x1080)}}"
 if [ "$RES" = native ]; then
   RES=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2; exit}')
   [ -z "$RES" ] && RES=$(xrandr 2>/dev/null | awk '/\*/{print $1; exit}')
@@ -31,14 +31,39 @@ CMD=(env LD_PRELOAD="$PRELOAD" ./game)
 
 # The game's own output level is low (cabinets use an external amp), so boost its PipeWire/PulseAudio
 # stream once it appears. HALO_VOLUME=100% turns this off.
+IS_WSL=0
+grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
 boost_volume() {
+  # WSLg's PulseAudio sink often starts low/muted: unmute and set it to 100% first.
+  if [ "$IS_WSL" = 1 ]; then
+    pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null || true
+    pactl set-sink-volume @DEFAULT_SINK@ 100% 2>/dev/null || true
+  fi
+  # Keep re-applying for a while: the game may reopen its audio stream (new sink-input id).
+  done_ids=" "
   for _ in $(seq 1 120); do
     sleep 2
-    id=$(pactl list sink-inputs 2>/dev/null | awk '/^Sink Input #/{id=substr($3,2)} /PipeWire ALSA \[game\]|ALSA plug-in \[game\]/{print id; exit}')
-    [ -n "$id" ] && { pactl set-sink-input-volume "$id" "${HALO_VOLUME:-300%}" 2>/dev/null || true; return; }
+    for id in $(pactl list sink-inputs 2>/dev/null | awk '/^Sink Input #/{id=substr($3,2)} /PipeWire ALSA \[game\]|ALSA plug-in \[game\]|application.process.binary = "game"/{print id}' | sort -u); do
+      case "$done_ids" in *" $id "*) continue;; esac
+      pactl set-sink-input-volume "$id" "${HALO_VOLUME:-300%}" 2>/dev/null && done_ids="$done_ids$id "
+    done
   done
 }
 boost_volume &
+
+# Fullscreen: default on under WSL (WSLg opens a normal window); on Linux set HALO_FULLSCREEN=1.
+make_fullscreen() {
+  command -v wmctrl >/dev/null 2>&1 || return 0
+  before=$(wmctrl -l 2>/dev/null | awk '{print $1}')
+  for _ in $(seq 1 90); do
+    sleep 2
+    for w in $(wmctrl -l 2>/dev/null | awk '{print $1}'); do
+      echo "$before" | grep -qx "$w" && continue
+      wmctrl -i -r "$w" -b add,fullscreen 2>/dev/null && return 0
+    done
+  done
+}
+[ "${HALO_FULLSCREEN:-$IS_WSL}" = 1 ] && make_fullscreen &
 
 # Choose ALSA config: PipeWire if available, otherwise standard PulseAudio/default ALSA downmix
 ASOUND_CONF="$OUT/halo_asound.conf"

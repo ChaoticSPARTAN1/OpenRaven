@@ -186,6 +186,21 @@ public class XInputBridge {
 
 Write-Step "Starting WSL2 environment and launching OpenRaven..."
 
+# Restart WSL first: a stale WSL/WSLg session (GPU, audio, display) stops the game from opening.
+Write-Host "[OpenRaven] Restarting WSL (wsl --shutdown)..." -ForegroundColor Cyan
+& wsl.exe --shutdown 2>$null
+Start-Sleep -Seconds 3
+
+# Detect the primary monitor's real (DPI-unscaled) resolution for fullscreen.
+$HaloRes = ""
+try {
+    Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class OrDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i); }' -ErrorAction SilentlyContinue
+    [void][OrDpi]::SetProcessDPIAware()
+    $w = [OrDpi]::GetSystemMetrics(0); $h = [OrDpi]::GetSystemMetrics(1)
+    if ($w -gt 0 -and $h -gt 0) { $HaloRes = "${w}x${h}" }
+} catch {}
+if ($HaloRes) { Write-Host "[OpenRaven] Monitor resolution: $HaloRes (fullscreen)" -ForegroundColor Cyan }
+
 $VkWinProc = $null
 try {
     # Convert Windows paths to WSL paths (/mnt/...)
@@ -205,9 +220,9 @@ try {
 
     if (-not [string]::IsNullOrWhiteSpace($WinZipPath)) {
         $WslZipPath = (& wsl.exe wslpath -a ($WinZipPath -replace "\\", "/")).Trim()
-        & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh; HOST_IP=\$(ip route show default 2>/dev/null | awk '{print \$3; exit}'); RIO2PAD_STATE_FILE=`"$WslPadState`" RAVENVK_WIN_SERVER=`"\${HOST_IP:-127.0.0.1}:28765`" ./start_linux.sh `"$WslZipPath`" $($GameArgs -join ' ')"
+        & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh; command -v wmctrl >/dev/null 2>&1 || sudo apt-get install -y wmctrl >/dev/null 2>&1 || true; HOST_IP=\$(ip route show default 2>/dev/null | awk '{print \$3; exit}'); HALO_RES=`"$HaloRes`" HALO_FULLSCREEN=1 RIO2PAD_STATE_FILE=`"$WslPadState`" RAVENVK_WIN_SERVER=`"\${HOST_IP:-127.0.0.1}:28765`" ./start_linux.sh `"$WslZipPath`" $($GameArgs -join ' ')"
     } else {
-        & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh; HOST_IP=\$(ip route show default 2>/dev/null | awk '{print \$3; exit}'); RIO2PAD_STATE_FILE=`"$WslPadState`" RAVENVK_WIN_SERVER=`"\${HOST_IP:-127.0.0.1}:28765`" ./start_linux.sh $($GameArgs -join ' ')"
+        & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh; command -v wmctrl >/dev/null 2>&1 || sudo apt-get install -y wmctrl >/dev/null 2>&1 || true; HOST_IP=\$(ip route show default 2>/dev/null | awk '{print \$3; exit}'); HALO_RES=`"$HaloRes`" HALO_FULLSCREEN=1 RIO2PAD_STATE_FILE=`"$WslPadState`" RAVENVK_WIN_SERVER=`"\${HOST_IP:-127.0.0.1}:28765`" ./start_linux.sh $($GameArgs -join ' ')"
     }
 } finally {
     if ($VkWinProc -and -not $VkWinProc.HasExited) {

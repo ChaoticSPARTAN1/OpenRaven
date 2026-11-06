@@ -21,6 +21,13 @@ IS_WSL=0
 grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
 if [ "$IS_WSL" = 1 ]; then
   export GALLIUM_DRIVER="${GALLIUM_DRIVER:-d3d12}"
+  export mesa_glthread="${mesa_glthread:-true}"
+  export MESA_GLTHREAD="${MESA_GLTHREAD:-true}"
+  if [ -z "$MESA_D3D12_DEFAULT_ADAPTER_NAME" ]; then
+    # Auto-detect RTX / GeForce GPU if multiple GPUs (e.g. Tesla + RTX 3080) are present
+    DETECTED_GPU=$(/usr/lib/wsl/lib/nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -iE 'geforce|rtx' | head -n 1)
+    [ -n "$DETECTED_GPU" ] && export MESA_D3D12_DEFAULT_ADAPTER_NAME="$DETECTED_GPU"
+  fi
   if [ -z "$RAVENVK_WIN_SERVER" ]; then
     HOST_IP=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
     export RAVENVK_WIN_SERVER="${HOST_IP:-127.0.0.1}:28765"
@@ -62,20 +69,10 @@ boost_volume() {
 }
 boost_volume &
 
-# Fullscreen: on WSL, ravengfx applies borderless windowing to prevent FreeRDP RAIL unmap bugs.
-# On native Linux, apply EWMH fullscreen via wmctrl.
+# Fullscreen: on native Linux, apply EWMH fullscreen via wmctrl.
+# On WSLg, windows map natively to the Windows desktop via FreeRDP RAIL.
 make_fullscreen() {
   if [ "$IS_WSL" = 1 ]; then
-    command -v xprop >/dev/null 2>&1 || return 0
-    for _ in $(seq 1 30); do
-      sleep 1
-      if command -v xdotool >/dev/null 2>&1; then
-        for w in $(xdotool search --onlyvisible . 2>/dev/null); do
-          xprop -id "$w" -f _MOTIF_WM_HINTS 32c -set _MOTIF_WM_HINTS "0x2, 0x0, 0x0, 0x0, 0x0" 2>/dev/null || true
-          xdotool windowmove "$w" 0 0 windowsize "$w" 1920 1080 2>/dev/null || true
-        done
-      fi
-    done
     return 0
   fi
   command -v wmctrl >/dev/null 2>&1 || return 0
@@ -87,11 +84,13 @@ make_fullscreen() {
     done
   done
 }
-[ "${HALO_FULLSCREEN:-$IS_WSL}" = 1 ] && make_fullscreen &
+[ "${HALO_FULLSCREEN:-0}" = 1 ] && make_fullscreen &
 
-# Choose ALSA config: PipeWire if available, otherwise standard PulseAudio/default ALSA downmix
+# Choose ALSA config: lookahead soft-limiter if LADSPA is available, otherwise Pulse/PipeWire fallback
 ASOUND_CONF="$OUT/halo_asound.conf"
-if [ -f "$OUT/halo_asound_pulse.conf" ] && ! pactl info 2>/dev/null | grep -qi pipewire; then
+if [ -f /usr/lib/ladspa/fast_lookahead_limiter_1913.so ] || [ -f /usr/lib64/ladspa/fast_lookahead_limiter_1913.so ]; then
+  ASOUND_CONF="$OUT/halo_asound_limiter.conf"
+elif [ -f "$OUT/halo_asound_pulse.conf" ] && ! pactl info 2>/dev/null | grep -qi pipewire; then
   ASOUND_CONF="$OUT/halo_asound_pulse.conf"
 fi
 
@@ -131,6 +130,8 @@ bwrap --tmpfs / \
   --setenv LIBGL_ALWAYS_SOFTWARE "${HALO_SW:-0}" \
   --setenv IS_WSL "$IS_WSL" \
   ${GALLIUM_DRIVER:+--setenv GALLIUM_DRIVER "$GALLIUM_DRIVER"} \
+  --setenv mesa_glthread "${mesa_glthread:-true}" \
+  --setenv MESA_GLTHREAD "${MESA_GLTHREAD:-true}" \
   ${MESA_D3D12_DEFAULT_ADAPTER_NAME:+--setenv MESA_D3D12_DEFAULT_ADAPTER_NAME "$MESA_D3D12_DEFAULT_ADAPTER_NAME"} \
   ${HALO_FULLSCREEN:+--setenv HALO_FULLSCREEN "$HALO_FULLSCREEN"} \
   --setenv DISPLAY "${DISPLAY:-:0}" \

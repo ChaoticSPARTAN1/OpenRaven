@@ -171,14 +171,18 @@ public class XInputBridge {
         byte[] buf = new byte[4 + 16 + 4 * 32 * 4 + 4 * 8 * 4]; // 660 bytes
         using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)) {
             while (true) {
+                Array.Clear(buf, 0, buf.Length);
                 Buffer.BlockCopy(BitConverter.GetBytes((uint)0x52494F32), 0, buf, 0, 4);
+                int targetSlot = 0;
                 for (uint p = 0; p < 4; p++) {
                     XINPUT_STATE st;
-                    bool ok = GetState(p, out st) == 0;
-                    Buffer.BlockCopy(BitConverter.GetBytes(ok ? 1 : 0), 0, buf, 4 + (int)p * 4, 4);
-                    int bBase = 20 + (int)p * 128;
-                    int aBase = 20 + 512 + (int)p * 32;
-                    if (ok) {
+                    if (GetState(p, out st) == 0 && targetSlot < 4) {
+                        int v = targetSlot++;
+                        // Map first physically active controller to Player 1 (virtual slot 0), second to Player 2, etc.
+                        Buffer.BlockCopy(BitConverter.GetBytes(1), 0, buf, 4 + v * 4, 4);
+                        int bBase = 20 + v * 128;
+                        int aBase = 20 + 512 + v * 32;
+
                         ushort b = st.Gamepad.wButtons;
                         // PAD_A=0, PAD_B=1, PAD_X=2, PAD_Y=3, PAD_LB=4, PAD_RB=5, PAD_BACK=6, PAD_START=7
                         int[] btns = new int[8] {
@@ -198,8 +202,9 @@ public class XInputBridge {
                         short ly = (short)(st.Gamepad.sThumbLY == -32768 ? 32767 : -st.Gamepad.sThumbLY);
                         short rx = st.Gamepad.sThumbRX;
                         short ry = (short)(st.Gamepad.sThumbRY == -32768 ? 32767 : -st.Gamepad.sThumbRY);
-                        short lt = (short)(st.Gamepad.bLeftTrigger * 257 - 32767);
-                        short rt = (short)(st.Gamepad.bRightTrigger * 257 - 32767);
+                        // Hair-trigger response: threshold > 16 (~6% pull) immediately fires/grenades without requiring >50% squeeze
+                        short lt = (short)(st.Gamepad.bLeftTrigger > 16 ? (1000 + (st.Gamepad.bLeftTrigger - 16) * 130) : -32767);
+                        short rt = (short)(st.Gamepad.bRightTrigger > 16 ? (1000 + (st.Gamepad.bRightTrigger - 16) * 130) : -32767);
                         int[] axes = new int[6] { lx, ly, lt, rx, ry, rt };
                         for (int i = 0; i < 6; i++)
                             Buffer.BlockCopy(BitConverter.GetBytes(axes[i]), 0, buf, aBase + i * 4, 4);
@@ -249,6 +254,14 @@ if ($GpuName) {
     Write-Host "[OpenRaven] Hardware GPU selected: $GpuName" -ForegroundColor Green
     $env:MESA_D3D12_DEFAULT_ADAPTER_NAME = $GpuName
     $wslEnvList.Add("MESA_D3D12_DEFAULT_ADAPTER_NAME")
+
+    # Display VRAM statistics
+    try {
+        $gpuStat = & nvidia-smi.exe --query-gpu=name,memory.total,memory.free --format=csv,noheader 2>$null | Where-Object { $_ -match "GeForce|RTX" }
+        if ($gpuStat) {
+            Write-Host "[OpenRaven] GPU VRAM Available: $gpuStat" -ForegroundColor Green
+        }
+    } catch {}
 }
 
 # Check for explicit resolution in arguments (e.g. 1920x1080 or 3840x2160)
@@ -281,14 +294,57 @@ try {
     # Normalize CRLF line endings on shell scripts
     & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh"
 
-    # Pass display & input configuration to WSL via WSLENV
-    $env:HALO_FULLSCREEN = "1"
+    # Pass display, GPU, threading & input configuration to WSL via WSLENV
+    # Using windowed mode (HALO_FULLSCREEN = 0) ensures FreeRDP RAIL reliably creates a visible native window
+    $env:HALO_FULLSCREEN = "0"
     $wslEnvList.Add("HALO_FULLSCREEN")
+    $env:mesa_glthread = "true"
+    $wslEnvList.Add("mesa_glthread")
+    $env:MESA_GLTHREAD = "true"
+    $wslEnvList.Add("MESA_GLTHREAD")
     if ($WslPadState) {
         $env:RIO2PAD_STATE_FILE = $WslPadState
         $wslEnvList.Add("RIO2PAD_STATE_FILE")
     }
     $env:WSLENV = ($wslEnvList -join ":")
+
+    # Background monitor to bring Halo window to foreground as soon as FreeRDP RAIL creates it
+    $WinActivator = Start-Job -ScriptBlock {
+        $code = @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class WindowActivator {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder strText, int maxCount);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    public static bool Activate() {
+        bool found = false;
+        EnumWindows((hWnd, lParam) => {
+            StringBuilder sb = new StringBuilder(256);
+            GetWindowText(hWnd, sb, 256);
+            string title = sb.ToString();
+            if (title.IndexOf("Halo", StringComparison.OrdinalIgnoreCase) >= 0) {
+                ShowWindow(hWnd, 9); // SW_RESTORE
+                SetForegroundWindow(hWnd);
+                found = true;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+}
+"@
+        Add-Type -TypeDefinition $code -Language CSharp
+        for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ([WindowActivator]::Activate()) { break }
+        }
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($WinZipPath)) {
         $WslZipPath = (& wsl.exe wslpath -a ($WinZipPath -replace "\\", "/")).Trim()
@@ -297,6 +353,10 @@ try {
         & wsl.exe --cd $WslRepoRoot bash ./start_linux.sh $GameArgs
     }
 } finally {
+    if ($WinActivator) {
+        Stop-Job $WinActivator -ErrorAction SilentlyContinue
+        Remove-Job $WinActivator -Force -ErrorAction SilentlyContinue
+    }
     if ($VkWinProc -and -not $VkWinProc.HasExited) {
         Stop-Process -Id $VkWinProc.Id -Force -ErrorAction SilentlyContinue
     }

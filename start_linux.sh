@@ -50,15 +50,15 @@ fi
 if [ "${#need_pkgs[@]}" -gt 0 ]; then
   echo "[OpenRaven] Installing missing dependencies (${need_pkgs[*]})..."
   if command -v apt-get >/dev/null 2>&1; then
-    APT_PKGS=(bubblewrap unzip build-essential libgl1 libgl1-mesa-dri mesa-vulkan-drivers libvulkan1 libx11-6 libx11-dev libxi6 libxrandr2 liblapack3 libudev1 pulseaudio-utils alsa-utils libasound2-plugins libvulkan-dev wmctrl)
+    APT_PKGS=(bubblewrap unzip build-essential libgl1 libgl1-mesa-dri mesa-vulkan-drivers libvulkan1 libx11-6 libx11-dev libxi6 libxrandr2 liblapack3 libudev1 pulseaudio-utils alsa-utils libasound2-plugins swh-plugins ladspa-sdk libvulkan-dev wmctrl)
     [ "$IS_WSL" -eq 1 ] && APT_PKGS+=(gcc-mingw-w64-x86-64)
     $SUDO apt-get update && $SUDO apt-get install -y "${APT_PKGS[@]}"
   elif command -v dnf >/dev/null 2>&1; then
-    $SUDO dnf install -y bubblewrap unzip gcc gcc-c++ make libGL mesa-dri-drivers mesa-vulkan-drivers vulkan-loader libX11 libX11-devel libXi libXrandr lapack systemd-libs pulseaudio-utils alsa-utils vulkan-headers wmctrl
+    $SUDO dnf install -y bubblewrap unzip gcc gcc-c++ make libGL mesa-dri-drivers mesa-vulkan-drivers vulkan-loader libX11 libX11-devel libXi libXrandr lapack systemd-libs pulseaudio-utils alsa-utils ladspa-swh-plugins vulkan-headers wmctrl
   elif command -v pacman >/dev/null 2>&1; then
-    $SUDO pacman -Sy --needed --noconfirm bubblewrap unzip base-devel libglvnd mesa vulkan-radeon vulkan-intel vulkan-icd-loader libx11 libxi libxrandr lapack systemd-libs libpulse alsa-utils alsa-plugins vulkan-headers
+    $SUDO pacman -Sy --needed --noconfirm bubblewrap unzip base-devel libglvnd mesa vulkan-radeon vulkan-intel vulkan-icd-loader libx11 libxi libxrandr lapack systemd-libs libpulse alsa-utils alsa-plugins swh-plugins vulkan-headers
   elif command -v zypper >/dev/null 2>&1; then
-    $SUDO zypper install -y bubblewrap unzip gcc gcc-c++ make libGL1 Mesa-dri Mesa-vulkan-device-select libvulkan1 libX11-6 libX11-devel libXi6 libXrandr2 liblapack3 systemd-libs pulseaudio-utils alsa-utils vulkan-headers wmctrl
+    $SUDO zypper install -y bubblewrap unzip gcc gcc-c++ make libGL1 Mesa-dri Mesa-vulkan-device-select libvulkan1 libX11-6 libX11-devel libXi6 libXrandr2 liblapack3 systemd-libs pulseaudio-utils alsa-utils ladspa-swh-plugins vulkan-headers wmctrl
   else
     echo "Please install the following packages using your distro's package manager: ${need_pkgs[*]}"
     exit 1

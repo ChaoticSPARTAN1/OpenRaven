@@ -220,10 +220,29 @@ public class XInputBridge {
 
 Write-Step "Starting WSL2 environment and launching OpenRaven..."
 
-# Detect the primary monitor's real (DPI-unscaled) resolution for fullscreen.
+$wslEnvList = [System.Collections.Generic.List[string]]::new()
+
+# Detect active discrete/display GPU for Mesa D3D12 hardware acceleration under WSLg
+$GpuName = ""
+try {
+    $gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -match "PCI\\VEN" -and $_.Name -notmatch "Virtual|Basic|Tesla" } | Select-Object -ExpandProperty Name -First 1
+    if ($gpu) { $GpuName = $gpu }
+} catch {}
+if ($GpuName) {
+    Write-Host "[OpenRaven] Hardware GPU selected: $GpuName" -ForegroundColor Green
+    $env:MESA_D3D12_DEFAULT_ADAPTER_NAME = $GpuName
+    $wslEnvList.Add("MESA_D3D12_DEFAULT_ADAPTER_NAME")
+}
+
+# Check for explicit resolution in arguments (e.g. 1920x1080 or 3840x2160)
+# Under WSLg, 'native' resolution is automatically detected by xdpyinfo inside WSL to match desktop scaling.
 $HaloRes = ""
-try { $HaloRes = (& (Join-Path $PSScriptRoot "detect_res.ps1") | Select-Object -Last 1).Trim() } catch {}
-if ($HaloRes) { Write-Host "[OpenRaven] Monitor resolution: $HaloRes (fullscreen)" -ForegroundColor Cyan }
+if ($GameArgs -match "^\d+x\d+$") {
+    $HaloRes = ($GameArgs | Where-Object { $_ -match "^\d+x\d+$" } | Select-Object -First 1)
+    Write-Host "[OpenRaven] Resolution override: $HaloRes" -ForegroundColor Cyan
+    $env:HALO_RES = $HaloRes
+    $wslEnvList.Add("HALO_RES")
+}
 
 $VkWinProc = $null
 try {
@@ -247,12 +266,7 @@ try {
 
     # Pass display & input configuration to WSL via WSLENV
     $env:HALO_FULLSCREEN = "1"
-    $wslEnvList = [System.Collections.Generic.List[string]]::new()
     $wslEnvList.Add("HALO_FULLSCREEN")
-    if ($HaloRes) {
-        $env:HALO_RES = $HaloRes
-        $wslEnvList.Add("HALO_RES")
-    }
     if ($WslPadState) {
         $env:RIO2PAD_STATE_FILE = $WslPadState
         $wslEnvList.Add("RIO2PAD_STATE_FILE")

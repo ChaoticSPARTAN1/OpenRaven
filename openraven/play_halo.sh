@@ -19,9 +19,12 @@ PRELOAD="/pm/g7/halo/halo.so /pm/g7/rio2pad.so /pm/g7/ravengfx.so"
 
 IS_WSL=0
 grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
-if [ "$IS_WSL" = 1 ] && [ -z "$RAVENVK_WIN_SERVER" ]; then
-  HOST_IP=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
-  export RAVENVK_WIN_SERVER="${HOST_IP:-127.0.0.1}:28765"
+if [ "$IS_WSL" = 1 ]; then
+  export GALLIUM_DRIVER="${GALLIUM_DRIVER:-d3d12}"
+  if [ -z "$RAVENVK_WIN_SERVER" ]; then
+    HOST_IP=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+    export RAVENVK_WIN_SERVER="${HOST_IP:-127.0.0.1}:28765"
+  fi
 fi
 
 # Graphics settings (resolution, AA, anisotropy, FPS, ...): see graphics.ini.
@@ -37,8 +40,8 @@ CMD=(env LD_PRELOAD="$PRELOAD" ./game)
 # HALO_GDB=1: run under gdb and print a backtrace on crash (debugging).
 [ -n "$HALO_GDB" ] && CMD=(gdb -q -batch -ex "set startup-with-shell off" -ex "set environment LD_PRELOAD=$PRELOAD" -ex "handle SIGPIPE nostop noprint" -ex "set breakpoint pending on" -ex "${HALO_GDB_BREAK:-echo}" -ex run -ex "info breakpoints" -ex bt -ex "info registers rip" -ex 'x/8i $pc' -ex 'p/x $rbx' -ex 'p/x $rdi' -ex 'x/gx 0x16914d0' -ex 'x/4gx 0x1c1caa0' -ex 'x/40gx $rsp' --args ./game)
 
-# The game's own output level is low (cabinets use an external amp), so boost its PipeWire/PulseAudio
-# stream once it appears. HALO_VOLUME=100% turns this off.
+# The game's own output level is calibrated for arcade cabinets with hardware amps.
+# Under WSLg/PulseAudio, sink volume is already unmuted and set to 100%. Keeping stream at 100% avoids digital clipping.
 boost_volume() {
   # WSLg's PulseAudio sink often starts low/muted: unmute and set it to 100% first.
   if [ "$IS_WSL" = 1 ]; then
@@ -51,7 +54,7 @@ boost_volume() {
     sleep 2
     for id in $(pactl list sink-inputs 2>/dev/null | awk '/^Sink Input #/{id=substr($3,2)} /PipeWire ALSA \[game\]|ALSA plug-in \[game\]|application.process.binary = "game"/{print id}' | sort -u); do
       case "$done_ids" in *" $id "*) continue;; esac
-      pactl set-sink-input-volume "$id" "${HALO_VOLUME:-300%}" 2>/dev/null && done_ids="$done_ids$id "
+      pactl set-sink-input-volume "$id" "${HALO_VOLUME:-100%}" 2>/dev/null && done_ids="$done_ids$id "
     done
   done
 }
@@ -60,13 +63,18 @@ boost_volume &
 # Fullscreen: default on under WSL (WSLg opens a normal window); on Linux set HALO_FULLSCREEN=1.
 make_fullscreen() {
   command -v wmctrl >/dev/null 2>&1 || return 0
-  before=$(wmctrl -l 2>/dev/null | awk '{print $1}')
-  for _ in $(seq 1 90); do
-    sleep 2
+  for _ in $(seq 1 60); do
+    sleep 1
+    # Standard EWMH window managers
     for w in $(wmctrl -l 2>/dev/null | awk '{print $1}'); do
-      echo "$before" | grep -qx "$w" && continue
       wmctrl -i -r "$w" -b add,fullscreen 2>/dev/null && return 0
     done
+    # Fallback for WSLg/Weston (which doesn't implement _NET_CLIENT_LIST)
+    if command -v xdotool >/dev/null 2>&1; then
+      for w in $(xdotool search --onlyvisible . 2>/dev/null); do
+        wmctrl -i -r "$w" -b add,fullscreen 2>/dev/null && return 0
+      done
+    fi
   done
 }
 [ "${HALO_FULLSCREEN:-$IS_WSL}" = 1 ] && make_fullscreen &
@@ -111,6 +119,9 @@ bwrap --tmpfs / \
   --setenv RIO2PAD_SKIPBOOT "${RIO2PAD_SKIPBOOT:-1}" \
   ${HALO_GAME:+--ro-bind "$HALO_GAME" /pm/g7/halo/game} \
   --setenv LIBGL_ALWAYS_SOFTWARE "${HALO_SW:-0}" \
+  ${GALLIUM_DRIVER:+--setenv GALLIUM_DRIVER "$GALLIUM_DRIVER"} \
+  ${MESA_D3D12_DEFAULT_ADAPTER_NAME:+--setenv MESA_D3D12_DEFAULT_ADAPTER_NAME "$MESA_D3D12_DEFAULT_ADAPTER_NAME"} \
+  ${HALO_FULLSCREEN:+--setenv HALO_FULLSCREEN "$HALO_FULLSCREEN"} \
   --setenv DISPLAY "${DISPLAY:-:0}" \
   --setenv WAYLAND_DISPLAY "${WAYLAND_DISPLAY:-}" \
   --setenv PULSE_SERVER "${PULSE_SERVER:-}" \

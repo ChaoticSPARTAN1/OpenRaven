@@ -343,15 +343,81 @@ static void hook_tanf(void)
     for (uint64_t *q = (uint64_t *)0x1690000UL; q < (uint64_t *)0x1692800UL; q++)
         if (*q == (uint64_t)real_tanf) { *q = (uint64_t)log_tanf; fprintf(stderr, "[ravengfx] tanf slot %p\n", (void *)q); }
 }
+
+static void try_set_fullscreen(void *cd_ptr, unsigned long cdr_win)
+{
+    static int attempts = 0;
+    if (attempts >= 10 || !cd_ptr || !cdr_win) return;
+    const char *fs = getenv("HALO_FULLSCREEN");
+    if (!fs) fs = lookup("fullscreen");
+    if (fs && (!strcmp(fs, "0") || !strcasecmp(fs, "off") || !strcasecmp(fs, "false"))) {
+        attempts = 999;
+        return;
+    }
+
+    static void *x11 = NULL;
+    if (!x11) x11 = dlopen("libX11.so.6", RTLD_LAZY);
+    if (!x11) return;
+
+    typedef unsigned long (*pfn_XInternAtom)(void *, const char *, int);
+    typedef unsigned long (*pfn_XDefaultRootWindow)(void *);
+    typedef int (*pfn_XSendEvent)(void *, unsigned long, int, long, void *);
+    typedef int (*pfn_XFlush)(void *);
+
+    pfn_XInternAtom pXInternAtom = (pfn_XInternAtom)dlsym(x11, "XInternAtom");
+    pfn_XDefaultRootWindow pXDefaultRootWindow = (pfn_XDefaultRootWindow)dlsym(x11, "XDefaultRootWindow");
+    pfn_XSendEvent pXSendEvent = (pfn_XSendEvent)dlsym(x11, "XSendEvent");
+    pfn_XFlush pXFlush = (pfn_XFlush)dlsym(x11, "XFlush");
+
+    if (!pXInternAtom || !pXDefaultRootWindow || !pXSendEvent || !pXFlush) return;
+
+    unsigned long wm_state = pXInternAtom(cd_ptr, "_NET_WM_STATE", 0);
+    unsigned long wm_fullscreen = pXInternAtom(cd_ptr, "_NET_WM_STATE_FULLSCREEN", 0);
+    if (!wm_state || !wm_fullscreen) return;
+
+    struct {
+        int type;
+        unsigned long serial;
+        int send_event;
+        void *display;
+        unsigned long window;
+        unsigned long message_type;
+        int format;
+        long data[5];
+    } xev;
+    memset(&xev, 0, sizeof(xev));
+    xev.type = 33; // ClientMessage
+    xev.window = cdr_win;
+    xev.message_type = wm_state;
+    xev.format = 32;
+    xev.data[0] = 1; // _NET_WM_STATE_ADD
+    xev.data[1] = (long)wm_fullscreen;
+    xev.data[2] = 0;
+    xev.data[3] = 1; // normal application
+
+    unsigned long root = pXDefaultRootWindow(cd_ptr);
+    long mask = (1L << 17) | (1L << 19); // SubstructureNotifyMask | SubstructureRedirectMask
+    pXSendEvent(cd_ptr, root, 0, mask, &xev);
+    pXFlush(cd_ptr);
+    attempts++;
+    if (attempts == 1) {
+        fprintf(stderr, "[ravengfx] requested X11 fullscreen on window 0x%lx\n", cdr_win);
+    }
+}
+
 static void my_present(void *ctx)
 {
     my_swap(NULL, 0);                       // overlay + capture + FPS, before the real swap
+    void *(*cd)(void) = glsym("glXGetCurrentDisplay"); unsigned long (*cdr)(void) = glsym("glXGetCurrentDrawable");
+    if (cd && cdr) {
+        void *d = cd(); unsigned long w = cdr();
+        if (d && w) try_set_fullscreen(d, w);
+    }
     static double in_sum, out_sum, tprev; static long n;
     static int si_cur = -2, si_n;          // VSYNC / SWAP_INTERVAL (live from the overlay) / RAVENGFX_SWAPINTERVAL
     if (si_n++ % 30 == 0) {                // 0 = off, 1 = on, -1 = adaptive (tear only when late)
         const char *si = getenv("RAVENGFX_SWAPINTERVAL"); if (!si) si = lookup("VSYNC"); if (!si) si = lookup("SWAP_INTERVAL");
         int want = si ? (!strcmp(si, "adaptive") ? -1 : atoi(si)) : -2;
-        void *(*cd)(void) = glsym("glXGetCurrentDisplay"); unsigned long (*cdr)(void) = glsym("glXGetCurrentDrawable");
         if (want != -2 && want != si_cur) {
             si_cur = want;
             void (*ext)(void *, unsigned long, int) = glsym("glXSwapIntervalEXT");

@@ -16,6 +16,6 @@ g++ -shared -o ${OUT:-ravengfx.so} $O/ravengfx.o $O/ravenui.o $O/ravengltrace.o 
 echo built ravengfx.so
 # Build native Windows Vulkan worker (ravenvk_win.exe) if mingw-w64 is installed (for native VK_KHR_cooperative_matrix on Windows/WSL2)
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
-    x86_64-w64-mingw32-gcc -O2 -Wall -o vk/ravenvk_win.exe vk/ravenvk_win_daemon.c vk/ravenvk.c -lws2_32
+    x86_64-w64-mingw32-gcc -O2 -Wall -idirafter /usr/include -o vk/ravenvk_win.exe vk/ravenvk_win_daemon.c vk/ravenvk.c -lws2_32
     echo built vk/ravenvk_win.exe
 fi

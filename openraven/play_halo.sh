@@ -16,6 +16,14 @@ fi
 mkdir -p "$WS/pm/g7/halo/pmuser/messages" "$OUT/run_logs" "$WS/pm/g7/dump"
 
 PRELOAD="/pm/g7/halo/halo.so /pm/g7/rio2pad.so /pm/g7/ravengfx.so"
+
+IS_WSL=0
+grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
+if [ "$IS_WSL" = 1 ] && [ -z "$RAVENVK_WIN_SERVER" ]; then
+  HOST_IP=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+  export RAVENVK_WIN_SERVER="${HOST_IP:-127.0.0.1}:28765"
+fi
+
 # Graphics settings (resolution, AA, anisotropy, FPS, ...): see graphics.ini.
 . "$OUT/graphics.sh"
 # Resolution: command-line WxH wins, then graphics.ini `resolution` (WxH or "native"), else 1920x1080.
@@ -31,8 +39,6 @@ CMD=(env LD_PRELOAD="$PRELOAD" ./game)
 
 # The game's own output level is low (cabinets use an external amp), so boost its PipeWire/PulseAudio
 # stream once it appears. HALO_VOLUME=100% turns this off.
-IS_WSL=0
-grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
 boost_volume() {
   # WSLg's PulseAudio sink often starts low/muted: unmute and set it to 100% first.
   if [ "$IS_WSL" = 1 ]; then

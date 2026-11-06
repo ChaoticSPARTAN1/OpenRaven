@@ -43,23 +43,57 @@ $WinZipPath = ""
 if (-not (Test-Path $GameBin) -or -not (Test-Path $GameData)) {
     Write-Step "Game files not found in .\pm\g7\halo\."
 
-    # Check common paths first
+    # Check common paths first for extracted game folders or zip archives
     $CandidateDirs = @($RepoRoot, (Split-Path -Parent $RepoRoot), (Join-Path $env:USERPROFILE "Downloads"))
-    $FoundZips = [System.Collections.Generic.List[string]]::new()
+    $FoundDirs = [System.Collections.Generic.List[string]]::new()
     foreach ($dir in $CandidateDirs) {
         if (Test-Path -LiteralPath $dir) {
-            $matched = Get-ChildItem -LiteralPath $dir -Filter "*Raven*.zip" -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-            if ($matched) { $FoundZips.AddRange([string[]]$matched) }
+            if (Test-Path -LiteralPath (Join-Path $dir "pm\g7\halo\game")) {
+                $FoundDirs.Add((Join-Path $dir "pm"))
+            } elseif (Test-Path -LiteralPath (Join-Path $dir "g7\halo\game")) {
+                $FoundDirs.Add($dir)
+            }
+            $subDirs = Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue
+            foreach ($sub in $subDirs) {
+                if ($sub.FullName -ne $RepoRoot) {
+                    if (Test-Path -LiteralPath (Join-Path $sub.FullName "pm\g7\halo\game")) {
+                        $FoundDirs.Add((Join-Path $sub.FullName "pm"))
+                    } elseif (Test-Path -LiteralPath (Join-Path $sub.FullName "g7\halo\game")) {
+                        $FoundDirs.Add($sub.FullName)
+                    }
+                }
+            }
         }
     }
 
-    foreach ($cand in $FoundZips) {
+    foreach ($cand in $FoundDirs) {
         if (Test-Path -LiteralPath $cand) {
-            Write-Host "Found archive: $cand" -ForegroundColor Green
-            $ans = Read-Host "Use this file? [Y/n]"
+            Write-Host "Found extracted game directory: $cand" -ForegroundColor Green
+            $ans = Read-Host "Link and use this folder? [Y/n]"
             if ([string]::IsNullOrWhiteSpace($ans) -or $ans -match "^[Yy]") {
                 $WinZipPath = $cand
                 break
+            }
+        }
+    }
+
+    $FoundZips = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($WinZipPath)) {
+        foreach ($dir in $CandidateDirs) {
+            if (Test-Path -LiteralPath $dir) {
+                $matched = Get-ChildItem -LiteralPath $dir -Filter "*Raven*.zip" -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+                if ($matched) { $FoundZips.AddRange([string[]]$matched) }
+            }
+        }
+
+        foreach ($cand in $FoundZips) {
+            if (Test-Path -LiteralPath $cand) {
+                Write-Host "Found archive: $cand" -ForegroundColor Green
+                $ans = Read-Host "Use this file? [Y/n]"
+                if ([string]::IsNullOrWhiteSpace($ans) -or $ans -match "^[Yy]") {
+                    $WinZipPath = $cand
+                    break
+                }
             }
         }
     }
@@ -186,11 +220,6 @@ public class XInputBridge {
 
 Write-Step "Starting WSL2 environment and launching OpenRaven..."
 
-# Restart WSL first: a stale WSL/WSLg session (GPU, audio, display) stops the game from opening.
-Write-Host "[OpenRaven] Restarting WSL (wsl --shutdown)..." -ForegroundColor Cyan
-& wsl.exe --shutdown 2>$null
-Start-Sleep -Seconds 3
-
 # Detect the primary monitor's real (DPI-unscaled) resolution for fullscreen.
 $HaloRes = ""
 try { $HaloRes = (& (Join-Path $PSScriptRoot "detect_res.ps1") | Select-Object -Last 1).Trim() } catch {}
@@ -206,18 +235,35 @@ try {
     $VkWinExe = Join-Path $RepoRoot "openraven\vk\ravenvk_win.exe"
     if (-not (Test-Path $VkWinExe)) {
         Write-Host "[OpenRaven] Preparing native Windows Vulkan worker (ravenvk_win.exe) for FP16 matrix cores..." -ForegroundColor Cyan
-        & wsl.exe --cd $WslRepoRoot bash -c "if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 libvulkan-dev; fi; x86_64-w64-mingw32-gcc -O2 -Wall -o openraven/vk/ravenvk_win.exe openraven/vk/ravenvk_win_daemon.c openraven/vk/ravenvk.c -lws2_32 2>/dev/null || true"
+        & wsl.exe --cd $WslRepoRoot bash -c "if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 libvulkan-dev; fi; x86_64-w64-mingw32-gcc -O2 -Wall -idirafter /usr/include -o openraven/vk/ravenvk_win.exe openraven/vk/ravenvk_win_daemon.c openraven/vk/ravenvk.c -lws2_32 2>/dev/null || true"
     }
 
     if (Test-Path $VkWinExe) {
         $VkWinProc = Start-Process -FilePath $VkWinExe -ArgumentList "28765" -WindowStyle Hidden -PassThru
     }
 
+    # Normalize CRLF line endings on shell scripts
+    & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh"
+
+    # Pass display & input configuration to WSL via WSLENV
+    $env:HALO_FULLSCREEN = "1"
+    $wslEnvList = [System.Collections.Generic.List[string]]::new()
+    $wslEnvList.Add("HALO_FULLSCREEN")
+    if ($HaloRes) {
+        $env:HALO_RES = $HaloRes
+        $wslEnvList.Add("HALO_RES")
+    }
+    if ($WslPadState) {
+        $env:RIO2PAD_STATE_FILE = $WslPadState
+        $wslEnvList.Add("RIO2PAD_STATE_FILE")
+    }
+    $env:WSLENV = ($wslEnvList -join ":")
+
     if (-not [string]::IsNullOrWhiteSpace($WinZipPath)) {
         $WslZipPath = (& wsl.exe wslpath -a ($WinZipPath -replace "\\", "/")).Trim()
-        & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh; command -v wmctrl >/dev/null 2>&1 || sudo apt-get install -y wmctrl >/dev/null 2>&1 || true; HOST_IP=\$(ip route show default 2>/dev/null | awk '{print \$3; exit}'); HALO_RES=`"$HaloRes`" HALO_FULLSCREEN=1 RIO2PAD_STATE_FILE=`"$WslPadState`" RAVENVK_WIN_SERVER=`"\${HOST_IP:-127.0.0.1}:28765`" ./start_linux.sh `"$WslZipPath`" $($GameArgs -join ' ')"
+        & wsl.exe --cd $WslRepoRoot bash ./start_linux.sh $WslZipPath $GameArgs
     } else {
-        & wsl.exe --cd $WslRepoRoot bash -c "sed -i 's/\r$//' start_linux.sh openraven/*.sh openraven/fsr2/*.sh openraven/vk/*.sh 2>/dev/null || true; chmod +x start_linux.sh openraven/*.sh; command -v wmctrl >/dev/null 2>&1 || sudo apt-get install -y wmctrl >/dev/null 2>&1 || true; HOST_IP=\$(ip route show default 2>/dev/null | awk '{print \$3; exit}'); HALO_RES=`"$HaloRes`" HALO_FULLSCREEN=1 RIO2PAD_STATE_FILE=`"$WslPadState`" RAVENVK_WIN_SERVER=`"\${HOST_IP:-127.0.0.1}:28765`" ./start_linux.sh $($GameArgs -join ' ')"
+        & wsl.exe --cd $WslRepoRoot bash ./start_linux.sh $GameArgs
     }
 } finally {
     if ($VkWinProc -and -not $VkWinProc.HasExited) {

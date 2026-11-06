@@ -352,19 +352,11 @@ static void my_present(void *ctx)
         const char *si = getenv("RAVENGFX_SWAPINTERVAL"); if (!si) si = lookup("VSYNC"); if (!si) si = lookup("SWAP_INTERVAL");
         int want = si ? (!strcmp(si, "adaptive") ? -1 : atoi(si)) : -2;
         void *(*cd)(void) = glsym("glXGetCurrentDisplay"); unsigned long (*cdr)(void) = glsym("glXGetCurrentDrawable");
-        // The game sets its own swap interval (SGI/MESA), which can undo ours: read it back each time.
-        int (*qd)(void *, unsigned long, int, unsigned *) = glsym("glXQueryDrawable");
-        unsigned now_si = 0; int drift = 0;
-        if (want != -2 && si_cur != -2 && qd && cd && cdr && cd()) {
-            qd(cd(), cdr(), 0x20F1 /* GLX_SWAP_INTERVAL_EXT */, &now_si);
-            drift = want >= 0 ? (int)now_si != want : 0;
-            if (drift) fprintf(stderr, "[ravengfx] swap interval was changed to %u, setting it back\n", now_si);
-        }
-        if (want != -2 && (want != si_cur || drift)) {
+        if (want != -2 && want != si_cur) {
             si_cur = want;
             void (*ext)(void *, unsigned long, int) = glsym("glXSwapIntervalEXT");
             int (*mesa)(unsigned) = glsym("glXSwapIntervalMESA");
-            if (ext && cd && cdr) ext(cd(), cdr(), want); else if (mesa) mesa(want < 0 ? 1 : want);
+            if (ext && cd && cdr && cd() && cdr()) ext(cd(), cdr(), want); else if (mesa) mesa(want < 0 ? 1 : want);
             fprintf(stderr, "[ravengfx] swap interval %d (%s)\n", want, ext ? "EXT" : mesa ? "MESA" : "none");
         }
     }

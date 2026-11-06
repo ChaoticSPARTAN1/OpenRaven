@@ -40,6 +40,10 @@ fi
 IS_WSL=0
 if grep -qi microsoft /proc/version 2>/dev/null; then
   IS_WSL=1
+  if [ -z "$RAVENVK_WIN_SERVER" ]; then
+    HOST_IP=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+    export RAVENVK_WIN_SERVER="${HOST_IP:-127.0.0.1}:28765"
+  fi
   command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || need_pkgs+=(gcc-mingw-w64-x86-64)
 fi
 
@@ -190,7 +194,7 @@ if [ ! -f "$ROOT/openraven/rio2pad.so" ] || [ ! -f "$ROOT/openraven/ravengfx.so"
 fi
 if grep -qi microsoft /proc/version 2>/dev/null && [ ! -f "$ROOT/openraven/vk/ravenvk_win.exe" ] && command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
   echo "[OpenRaven] Building native Windows Vulkan helper (ravenvk_win.exe)..."
-  x86_64-w64-mingw32-gcc -O2 -Wall -o "$ROOT/openraven/vk/ravenvk_win.exe" "$ROOT/openraven/vk/ravenvk_win_daemon.c" "$ROOT/openraven/vk/ravenvk.c" -lws2_32
+  x86_64-w64-mingw32-gcc -O2 -Wall -idirafter /usr/include -o "$ROOT/openraven/vk/ravenvk_win.exe" "$ROOT/openraven/vk/ravenvk_win_daemon.c" "$ROOT/openraven/vk/ravenvk.c" -lws2_32
 fi
 
 echo ""

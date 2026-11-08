@@ -1,143 +1,137 @@
-# OpenRaven: Free & Open-Source PC Loader for Halo: Fireteam Raven
+# OpenRaven
 
-**Community:** join the [Discord](https://discord.gg/nuvpXycag8) for help and updates · support the project on [Ko-fi](https://ko-fi.com/wuzzy450)
-
-**Watch it run:** [Mission 1 on PC with OpenRaven (native Windows, 60 FPS)](https://youtu.be/pZ166zhaEjs)
+**Play the *Halo: Fireteam Raven* arcade game on your PC.** Free and open source, for Windows 10/11 and Linux.
 
 [![Halo: Fireteam Raven Mission 1 on PC with OpenRaven](https://img.youtube.com/vi/pZ166zhaEjs/maxresdefault.jpg)](https://youtu.be/pZ166zhaEjs)
 
-**OpenRaven** is a free, open-source compatibility and enhancement layer for running the *Halo: Fireteam Raven* (v3.11) arcade game on standard Linux and Windows 10/11 PCs.
+▶ [Watch Mission 1 running on PC](https://youtu.be/pZ166zhaEjs) · 💬 [Discord](https://discord.gg/nuvpXycag8) for help and updates · ☕ [Support on Ko-fi](https://ko-fi.com/wuzzy450)
 
-Original *Halo: Fireteam Raven* arcade cabinets run on custom x86_64 Linux hardware with a Raw Thrills RIO2 USB I/O board, IRTrack optical guns, and a 5.1 surround amplifier. OpenRaven runs the game in a rootless sandbox (`bwrap`), translates standard gamepads into arcade cabinet switches and IR gun aim, fixes modern `glibc` crashes, downmixes 5.1 surround audio to stereo, and adds an in-game **F1 Settings Overlay** with **AMD FSR 2.2** temporal upscaling, **Adaptive Frame Generation** (2x/3x/4x), **Hor+ Ultrawide / Aspect Ratio fixes**, and an experimental **Vulkan Neural Detail Pass** (WIP).
+*Halo: Fireteam Raven* (Raw Thrills / Play Mechanix / 343 Industries, 2018) is a four-player arcade rail shooter that only ever ran on arcade cabinets. OpenRaven runs the original v3.11 cabinet game on a normal PC with a controller or keyboard, in any resolution, with modern graphics options on top.
 
-> **Note:** No copyrighted game files are included in this repository. You need your own copy of the game archive (e.g. `Halo Fireteam Raven (3.11)(2018)[Raw Thrills].zip`). The launcher finds it by itself (in the game folder, the folder above it, Downloads or Desktop) or asks you to pick it.
-
----
-
-## Features
-
-- **Zero Cost & Rootless**: Entirely free and open-source. Uses `bubblewrap` (`bwrap`) to mount `/pm/g7/halo`, `/pm/g7/dump`, and `/eFileMaps` in a private user namespace—no root modifications to `/` required.
-- **Automatic Setup (Linux & Windows)**: One-click start scripts (`start_linux.sh` and `start_windows.bat`) find your game archives (or ask for them), extract the files into place, install missing dependencies, and launch the game.
-- **Native Windows build**: `ravenloader.exe` runs the Linux game directly on Windows with your normal GPU driver. No WSL, no VM.
-- **Plug-and-Play Controller Support (`rio2pad.so`)**:
-  - Hooks the cabinet's RIO2 switch polling (`sw_get`) and IRTrack gun getters directly in memory.
-  - Supports up to 4 Xbox-layout controllers (hot-plugging supported; XInput on Windows).
-  - Enables Free Play by default, restores muted gameplay/cutscene audio (`gameVolume`), hides the *"Factory Setup Has Not Been Completed"* banner, and skips boot-time file checks & gun calibration straight to Attract Mode in ~12 seconds.
-- **In-Game Settings Overlay & Graphics Enhancements (`ravengfx.so`)**:
-  - Press **F1** at any time (keyboard or mouse) to open the live settings menu (`graphics.ini`).
-  - **AMD FSR 2.2 Temporal Upscaling**: Replaces the engine's internal TAA pass using the engine's own jitter and motion vectors (`Native`, `Quality`, `Balanced`, `Performance`, `Ultra Performance`), keeping the HUD crisp at full screen resolution.
-  - **Adaptive Motion-Vector Frame Generation**: 2x / 3x / 4x optical-flow + depth-dilated motion vector frame generation (`interpolate` or `extrapolate` modes) with unwarped HUD separation.
-  - **Any Resolution & Aspect Ratio (Hor+)**: Unlocks the cabinet's `2.0` aspect ratio lock and patches the 3D camera projection matrix for 16:9, 16:10, 4:3, 21:9, and 32:9 displays, plus adjustable Field of View (`FOV_SCALE`).
-  - **Engine Quality Overrides**: 16x Anisotropic Filtering, 4096/8192 Shadow Maps, 4-cascade Stable Shadows, full-res Screen-Space Reflections, SSAO, VSync, and FPS cap.
-  - **HDR10 output (Windows)**: PQ / BT.2020 output with AutoHDR highlight expansion up to your screen's peak brightness (approach from Community Shaders' HDR addon).
-  - **Neural Detail Pass (Experimental / WIP)**: Vulkan cooperative-matrix / compute U-Net post-processing pass trained on remastered game tiles.
+> **You need your own copy of the game.** No game files are included here. OpenRaven works with the usual v3.11 game archive (for example `Halo Fireteam Raven (3.11)(2018)[Raw Thrills].zip`, as `.zip`, `.7z` or `.rar`).
 
 ---
 
-## Quick Start
+## What you get
+
+- **One-click setup.** Point it at your game archive once, and it unpacks everything and starts the game. After that it starts straight away.
+- **Native on Windows.** Runs the game directly on your graphics driver. No WSL, no virtual machine, no emulator.
+- **Controllers and keyboard.** Up to 4 Xbox-style controllers (one per player), plus keyboard controls.
+- **Arcade quirks handled.** Free Play on, boot checks and gun calibration skipped, straight to the title screen in about 10 seconds. Muted cabinet audio fixed.
+- **Any screen.** Any resolution and aspect ratio (16:9, 16:10, 21:9, 32:9, 4:3) with the correct proportions, and adjustable field of view.
+- **Better graphics than the cabinet.** Up to 16x texture filtering, 8192 shadow maps with 4 cascades, full-resolution reflections and SSAO.
+- **AMD FSR 2**, as anti-aliasing at native resolution or as an upscaler for slower GPUs.
+- **Frame generation** (2x / 3x / 4x). Only fills refresh slots your screen can show, so it never lowers the game's own frame rate.
+- **HDR10 on Windows**, with highlights (sky, explosions, lights) expanded up to your screen's peak brightness.
+- **In-game settings menu (F1).** Change everything live while you play.
+- **Neural detail pass** *(experimental, Linux only for now)*. A small neural network that restores texture and face detail.
+
+Out of the box it uses maximum quality, native resolution, and FSR 2 as anti-aliasing, at 60 FPS like the arcade machine.
+
+---
+
+## Install and play
+
+### Windows 10 / 11
+
+**You need:** Windows 10 or 11 (64-bit), a graphics card with an up-to-date driver (NVIDIA, AMD or Intel), and about 11 GB of free space.
+
+1. Download OpenRaven: **Code → Download ZIP** at the top of this page, and unzip it anywhere.
+2. Double-click **`start_windows.bat`**.
+3. **First run only:** it looks for your game archive in the OpenRaven folder, the folder above it, Downloads and Desktop. If it can't find it, a window opens so you can pick it. Unpacking takes a few minutes.
+4. The game starts fullscreen. Next time, double-clicking `start_windows.bat` starts it straight away.
+
+To quit, press **Alt+F4**. If something goes wrong, share `ravenloader.log` from the OpenRaven folder on the [Discord](https://discord.gg/nuvpXycag8).
 
 ### Linux
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/wuzzy450/OpenRaven.git
-   cd OpenRaven
-   ```
-2. Run the start script:
-   ```bash
-   ./start_linux.sh
-   ```
-3. On the first run it installs missing packages (`bubblewrap`, `7zip`, ...), finds your game archive (or opens a file picker / asks you to drag it in), extracts it and launches the game. You can also pass it directly: `./start_linux.sh game.zip`.
-
-To force-close the game at any time (arcade builds have no quit button):
 ```bash
-./openraven/stop_halo.sh
+git clone https://github.com/wuzzy450/OpenRaven.git
+cd OpenRaven
+./start_linux.sh
 ```
 
-### Windows 10 / 11 (native)
+The first run installs what it needs (asking for your password), finds your game archive or asks for it, unpacks it and starts the game. You can also give it the archive directly: `./start_linux.sh /path/to/game.zip`.
 
-Requirements: Windows 10/11 64-bit, a GPU with an OpenGL 4.6 driver (NVIDIA, AMD, Intel).
-
-1. Download this repository (Code > Download ZIP) and unzip it anywhere with enough space (~11 GB).
-2. Double-click **`start_windows.bat`** (or drop your archives onto it).
-3. First run: it finds your game archive (or asks you to pick it) and extracts it (a few minutes).
-4. The game starts fullscreen. Later runs start straight away.
-
-Problems? Send `ravenloader.log` from the game folder.
+To force-close the game (arcade games have no quit button): `./openraven/stop_halo.sh`
 
 ---
 
 ## Controls
 
-Up to 4 controllers are supported. Controller *N* controls Player *N*:
+Each controller is one player (controller 1 = player 1, and so on).
 
-| Controller Input | Arcade Cabinet Action |
+| Action | Controller | Keyboard |
+|---|---|---|
+| Aim | Right or left stick | Arrow keys |
+| Fire / select | RT | Space |
+| Reload | RB *(or shoot off-screen)* | R |
+| Grenade | LT | G |
+| Start / join / skip cutscene | Start | Enter or 1 |
+| Operator menu (TEST) | Back / View | F2 |
+| Insert coin *(not needed with Free Play)* | Y | – |
+| Settings menu | – | **F1** |
+
+---
+
+## Settings menu (F1)
+
+Press **F1** in game. Use the mouse, or the arrow keys, Tab, Enter (save) and Esc (close).
+
+- **Display:** resolution, VSync, FPS cap, aspect fix, field of view, FPS counter, HDR on/off and your screen's peak brightness *(Windows; turn on "Use HDR" in Windows display settings first)*.
+- **Upscaling:** FSR 2 mode (native, quality, balanced, performance, ultra performance) and sharpness.
+- **Frame generation:** off / 2x / 3x / 4x, interpolate or extrapolate.
+- **Quality:** texture filtering, shadow resolution and cascades, stable shadows, reflections, SSAO, bloom, glow, lens flare.
+- **Audio & Input:** volume, aim mode (cursor or absolute), stick speed.
+- **Cabinet:** Free Play, skip boot checks.
+
+Settings are saved in [`openraven/graphics.ini`](openraven/graphics.ini). Delete that file to go back to the game's own arcade settings.
+
+**Slow GPU?** Set FSR 2 mode to *quality* or *performance*, and lower the shadow resolution to 4096.
+
+---
+
+## How it works
+
+The cabinet runs a 64-bit Linux game with a Raw Thrills I/O board, IR light guns and a 5.1 amplifier. OpenRaven never modifies the game files. It loads the game as is and swaps the cabinet hardware for PC equivalents:
+
+- **Input** (`rio2pad`): the cabinet's switch and gun-tracking reads are answered from your controllers and keyboard.
+- **Graphics** (`ravengfx`): engine settings are overridden at start-up, the camera projection is corrected for your screen shape, and FSR 2, frame generation, HDR and the F1 menu hook into the game's OpenGL rendering.
+- **Linux:** the game runs in a rootless `bubblewrap` sandbox that recreates the cabinet's folder layout.
+- **Windows:** `ravenloader.exe` is a loader for Linux programs. It loads the game's own Linux binaries into a Windows process and connects them to Windows replacements for the Linux functions they use (files, threads, windows, OpenGL, input, sound). The game's own audio engine plays through Windows audio.
+
+### Project layout
+
+| Path | What it is |
 |---|---|
-| **Right Stick** or **Left Stick** | Aim crosshair (Cursor or Absolute mode, configurable in **F1**) |
-| **RT** (Right Trigger) | Fire weapon / Menu select |
-| **RB** (Right Bumper) | Reload weapon *(shooting off-screen also reloads)* |
-| **LT** (Left Trigger) | Throw Grenade |
-| **Start** | Player START / Join game / Skip cutscene |
-| **Back / Select / View** | Arcade TEST / Operator Diagnostic Menu |
-| **Y** | Insert Coin *(not needed when Free Play is enabled)* |
-| **F1** *(Keyboard)* | Open / Close **OpenRaven Settings Overlay** |
+| `start_windows.bat`, `openraven/setup_windows.ps1` | Windows launcher: finds and unpacks the game, starts `ravenloader.exe` |
+| `start_linux.sh`, `openraven/play_halo.sh` | Linux launcher and sandbox |
+| `openraven/win/` | Windows loader (`ravenloader.exe`, prebuilt) and its sources |
+| `openraven/rio2pad.c`, `openraven/win/rio2pad_win.c` | Controller and keyboard input, cabinet fixes |
+| `openraven/ravengfx.c`, `openraven/win/ravengfx_win.c` | Engine settings, aspect-ratio fix, frame hooks |
+| `openraven/ravenui.c`, `openraven/win/ravenui_win.c` | F1 settings menu |
+| `openraven/ravenfsr.cpp`, `openraven/fsr2/` | FSR 2 (OpenGL) |
+| `openraven/ravenfg.c` | Frame generation |
+| `openraven/win/ravenhdr_win.c` | HDR10 output |
+| `openraven/ravennn*.inc`, `openraven/vk/`, `openraven/neural/` | Neural detail pass (Vulkan) |
 
----
+### Building from source
 
-## In-Game Settings Overlay (F1)
+Prebuilt files are included, so you only need this if you change the code.
 
-Press **F1** while the game is running to open the OpenRaven configuration menu. You can navigate with **Arrow Keys + Tab + Enter/Esc** or with the **Mouse**.
-
-- **Display**: Resolution (`native`, `1080p`, `1440p`, `4K`, ultrawide), Render Scale, VSync, FPS Cap, Hor+ Aspect Fix, Field of View, FPS Counter, HDR (Windows: on/off + your screen's peak brightness; needs *Use HDR* on in Windows display settings).
-- **Upscaling & Frame Generation**:
-  - **FSR 2.2**: `off` or `fsr2` (`native`, `quality`, `balanced`, `performance`, `ultra`) + live sharpness slider.
-  - **Frame Generation**: `off`, `2x`, `3x`, `4x` (`interpolate` or `extrapolate`). Only adds frames the screen can show, so it never lowers the game's own FPS.
-  - **Neural Detail (WIP)**: Experimental Vulkan neural enhancement pass *(currently in active training/development)*.
-- **Quality**: Anisotropic Filtering (up to 16x), Shadow Map Resolution (up to 8192), Shadow Cascades (up to 4), Stable Shadows, SSAO, Reflections Resolution, Bloom/Glow sliders.
-- **Audio & Input**: Stream Volume Boost (`100%`–`400%`), Aim Mode (`cursor` vs `abs`), Stick Speed.
-- **Cabinet**: Free Play toggle, Skip Boot Checks toggle.
-
-All settings are saved to [`openraven/graphics.ini`](openraven/graphics.ini).
-
----
-
-## Project Layout
-
-| Path | Description |
-|---|---|
-| `start_linux.sh` | One-click Linux installer & launcher (asks for game `.zip` on first run) |
-| `start_windows.bat` | One-click Windows launcher (runs `openraven/setup_windows.ps1`: finds archives, sets up files, starts the game) |
-| `openraven/win/` | Native Windows loader `ravenloader.exe` (ELF loader + Windows shims, input, overlay, FSR 2, frame gen, HDR) |
-| `openraven/play_halo.sh` | Rootless `bwrap` sandbox launcher |
-| `openraven/stop_halo.sh` | Force-closes the running arcade process |
-| `openraven/build.sh` | Compiles `rio2pad.so`, `fsr2/libfsr2gl.a`, and `ravengfx.so` from source |
-| `openraven/rio2pad.c` | Cabinet I/O (`sw_get`), IRTrack gun aim, audio volume, free play, and `glibc` crash-fix shim |
-| `openraven/ravengfx.c` | Engine config overrides, Hor+ camera projection hook, and frame presentation hook |
-| `openraven/ravenui.c` | F1 in-game settings overlay UI (OpenGL 3.3 + X11/XInput2) |
-| `openraven/ravenfsr.cpp` | AMD FidelityFX Super Resolution 2.2 (OpenGL 4.6 backend) integration |
-| `openraven/ravenfg.c` | Motion-vector & depth-dilated frame generation pass |
-| `openraven/vk/` | Vulkan cooperative-matrix & compute backend for the experimental neural pass |
-
----
-
-## Building from Source
-
-Prebuilt binaries (`rio2pad.so` and `ravengfx.so`) are included, and `start_linux.sh` will also build them automatically if missing. To rebuild manually after editing any C/C++ files:
-
-```bash
-cd openraven
-./build.sh
-```
-
-Windows (`ravenloader.exe` is prebuilt): install [MSYS2](https://www.msys2.org/) with the clang64 toolchain, then in a shell with `C:/msys64/clang64/bin` on PATH run `make` in `openraven/win`.
+- **Linux:** `cd openraven && ./build.sh` (needs gcc/g++, X11 and Vulkan headers; `start_linux.sh` installs them).
+- **Windows:** install [MSYS2](https://www.msys2.org/) with the clang64 toolchain, put `C:/msys64/clang64/bin` on your PATH, then run `make` in `openraven/win`.
 
 ---
 
 ## Credits
 
-- **Wuzzy450**: Creator ([Ko-fi](https://ko-fi.com/wuzzy450) · [Discord](https://discord.gg/nuvpXycag8))
-- **AMD FidelityFX FSR 2.2** & **JuanDiegoMontoya** (`FidelityFX-FSR2-OpenGL`): MIT-licensed OpenGL FSR 2 implementation in `openraven/fsr2/`
+- **Wuzzy450**: creator ([Ko-fi](https://ko-fi.com/wuzzy450) · [Discord](https://discord.gg/nuvpXycag8))
+- **AMD FidelityFX FSR 2**, and **JuanDiegoMontoya**'s MIT-licensed OpenGL port of it (`openraven/fsr2/`)
+- **Pumbo** (Filoppi): the AutoHDR curve used for HDR highlights
 
 ## License
 
-MIT License. OpenRaven is an unofficial fan compatibility project and is not affiliated with Microsoft, 343 Industries, Raw Thrills, or Play Mechanix. No copyrighted game data is distributed in this repository.
+OpenRaven's own code is MIT licensed. Included third-party files keep their own licenses: FSR 2 (MIT), the GCC runtime libraries in `openraven/cabinet_libs/` (GPL with the GCC Runtime Library Exception), and FMOD in `openraven/extralibs/` (FMOD license).
+
+OpenRaven is an unofficial fan project. It isn't affiliated with or endorsed by Microsoft, 343 Industries, Raw Thrills or Play Mechanix, and it contains no game data.

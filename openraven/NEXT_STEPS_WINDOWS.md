@@ -1,4 +1,4 @@
-# Native Windows version: START HERE (updated 2026-11-07)
+# Native Windows version: START HERE (updated 2026-11-08)
 
 **Goal (user decision, 2026-11-06):** a native Windows build. No WSL, no WSLg, no Linux VM. Players
 double-click an `.exe` and the game runs on the real Windows GPU driver, as fast and clean as the
@@ -237,85 +237,76 @@ The log prints them on a `settings:` line.
   `llvm-objdump -d --no-show-raw-insn --start-address=0x... <file>`; for crashes in our own exe,
   `llvm-nm -n ravenloader.exe` (image base 0x7ff600000000).
 
-## Next steps, in order (user's list, 2026-11-07)
+## Next steps, in order (updated 2026-11-08)
 
-Work through these in order. Each one: build, run, check `ravenloader.log` + `ravenshots/`, then
-update this file. Tell the user the answer to item 7 in the final message.
+Done since the 2026-11-07 list: audio (game's own Linux FMOD -> shim_alsa.c -> WASAPI), ravengfx +
+F1 overlay port, FSR 2, frame generation (never lowers real FPS), HDR10, one-click launchers
+(Windows + Linux), GitHub release (PR #1 squash-merged into main, WSL version removed).
+Each step: build, run, check `ravenloader.log`, update this file. Never save scripted UI tests into
+the user's `openraven/graphics.ini` (see "Default settings for new players").
 
-1. **Audio (milestone 6).** Replace the temporary no-audio fallback in `shim_lookup` (main.c:
-   `fmod_ok` / `fmod_fail`). The game calls the FMOD **C++** API (~58 Linux-mangled names, e.g.
-   `_ZN4FMOD6System...`, `_ZN4FMOD6Studio6System10initializeEijjPv`; full list:
-   `grep FMOD ravenloader.log` / `runtime_imports.tsv`). Use the Windows FMOD Studio 1.10 DLLs
-   (`fmod.dll`, `fmodstudio.dll`, `fmodstudioapi11020` era, matching the Linux .so version in
-   `pm/g7/halo/`) and their **C** API (`FMOD_Studio_System_Create`, `FMOD_System_*`, ...): each C++
-   method is `this` + args -> C function with the handle first, wrapped `SV`. Bank files load from
-   remapped paths. Same stereo downmix + volume boost as `play_halo.sh` / `halo_asound.conf`.
-   rio2pad's `gameVolume 0 -> 100` fix is already in `rio2pad_win.c`. Check: attract music and
-   gameplay sound play, no crackle, volume like Linux.
+1. **Neural rendering on Windows: Vulkan, in-process, FP16 accumulation (user's top priority).**
+   Ship only the v8 network (SeedVR2 teacher): `neural/raven_nn_weights.h` (= `raven_nn8_weights.h`,
+   sha256 3bafb32c...). No other weights in the repo.
+   What exists: `ravennn.inc` -> `ravennn_vk.inc` (GL final pass + Vulkan network) and `vk/ravenvk.c`
+   (device setup, `rvk_init`, cooperative-matrix detection: level 2 = fp16 accumulate works, 1 = fp32
+   only, 0 = none) with prebuilt SPIR-V in `vk/ravenvk_spv.h` (`conv_cm.comp` built with -DACC16=1 and
+   =0, `conv_plain.comp`, `misc2.comp`), so no glslc is needed on Windows. On Windows today
+   `ravenfg.c` has an `#ifdef _WIN32` stub for `nn_apply` (prints "NEURAL not available").
+   Work:
+   - Build `ravennn.inc` + `vk/ravenvk.c` into ravenloader.exe (clang64). Load `vulkan-1.dll` with
+     LoadLibrary + `vkGetInstanceProcAddr` (no Vulkan SDK needed at run time); headers from MSYS2
+     `mingw-w64-clang-x86_64-vulkan-headers`.
+   - Zero-copy GL <-> Vulkan sharing, Windows flavour of the Linux fd path (`nn_vk_ok = 1`):
+     `VK_KHR_external_memory_win32` + `VK_KHR_external_semaphore_win32` on the Vulkan side,
+     `GL_EXT_memory_object_win32` + `GL_EXT_semaphore_win32` (glImportMemoryWin32HandleEXT,
+     glImportSemaphoreWin32HandleEXT) on the GL side. Pick the Vulkan device whose deviceUUID matches
+     GL's `GL_DEVICE_UUID_EXT` (the PC has a Tesla P40 too: never run on it). Keep the host-staging
+     fallback (`nn_vk_ok = 2`) for drivers without the win32 extensions. Drop the WSL TCP daemon path
+     (`RAVENVK_WIN_SERVER`, `ravenvk_win_daemon.c`) once this works.
+   - **FP16 accumulation:** use the ACC16=1 cooperative-matrix kernel when the driver lists a
+     16x16x16 fp16 A/B with fp16 C/result (RTX 3080 should); fall back to fp32 accumulate only if it
+     doesn't. Log the choice at start ("[ravennn] matrix cores, fp16 accumulate"). Check quality:
+     run one test frame through both kernels and log PSNR / max error vs fp32 (expect < 1/255 visible
+     difference). Log the pass cost in ms per frame.
+   - Enable the F1 Neural items on Windows (NEURAL, strength, stability, pattern guard, backend) and
+     the NEURAL key in graphics.ini (repo default stays NEURAL = 0).
+   - Check: same picture as the Linux neural pass on the same frame (`RAVENNN_DUMP` / screenshots),
+     no stutter, 60 FPS at 4K with FSR 2 native + neural on the 3080 (or say what it costs).
 
-2. **Port ravengfx (graphics settings) first: FSR 2 and frame gen depend on it.** `ravengfx.c`
-   (460 lines) inline-hooks `cfg_get_int` @0x924650 / `cfg_get_float` @0x9247a0 and
-   `video_set_mode` @0x4fb730 and reads `openraven/graphics.ini`. Port it as `win/ravengfx_win.c`
-   (same pattern as `rio2pad_win.c`: VirtualProtect + abs jmp, hooks `SV`, install from main.c
-   before `run_inits`). `resolution = native` should make the game **render at 3840x2160**, so
-   `present_scaled()` (shim_glx.c) stops being needed at 4K. Keep it for lower render sizes.
-   Port `ravenui.c` too (F1 overlay, writes graphics.ini). Present hooks go into `s_glXSwapBuffers`
-   (shim_glx.c), before `present_scaled`.
+2. **Play a full round on Windows** (user played mission 1 fine). Next: missions 2+, dying,
+   continue countdown, game over, 2-player with two pads, 15+ minutes with no crash. Re-test HDR
+   on/off live and the F1 overlay during gameplay. Open from before: aligned_alloc > 16,
+   __realpath_chk, /proc/meminfo, /sys/class/dmi/id/*, LAPACK (20 functions) untested.
 
-3. **FSR 2 on Windows.** `ravenfsr.cpp` + `fsr2/` (Linux build of the FSR 2 GL path). Build it with
-   MSYS2 clang64 into the exe, or as a native DLL. `graphics.ini` has `UPSCALER = fsr2`,
-   `FSR_QUALITY`, `FSR_SHARPNESS`. Check: log says FSR 2 active, the render size drops (Quality =
-   67%), the picture is sharp, no ghosting, compared with a Linux `gfxshot.sh` frame.
+3. **Tune the user's own settings with neural ON** (RTX 3080, 4K, HDR on): measure the heaviest
+   scene. If under 60: FSR_QUALITY native -> quality, SHADOW_SIZE 8192 -> 4096, SHADOW_SPLITS 4 -> 3,
+   SSR 1.0 -> 0.75, frame gen last. Only change `openraven/graphics.ini` (the user's), not the repo
+   default.
 
-4. **Frame generation on Windows.** `ravenfg.c` (`FRAME_GEN`, `FG_MODE = interpolate`, adaptive,
-   refresh rate auto). On Windows get the refresh rate from `EnumDisplaySettings`, pace with
-   `wglSwapIntervalEXT` / DwmFlush. Check with PresentMon: shown FPS doubles when the game drops
-   below refresh, with even frame pacing, and real FPS never goes down.
+4. **Test the Linux version after the merge.** `play_halo.sh` changed (main's version + prefers
+   `openraven/3.11-dec`), `ravengfx.so` was rebuilt in WSL from merged sources (v8 weights + frame-gen
+   fix) but nobody has run it. On a real Linux box: `./start_linux.sh` with only the TP zip, attract
+   -> round, audio limiter, F1, neural pass.
 
-5. **Vulkan layer + neural rendering on Windows.** `ravennn_vk.inc` + `vk/` (compute shaders,
-   `build_vk.sh`) + `neural/raven_nn.bin`. On Linux it ran as a separate daemon over TCP port 28765.
-   On Windows, run it **in-process**: create a Vulkan device on the same GPU, share the frame with
-   GL through `GL_EXT_memory_object_win32` + `GL_EXT_semaphore_win32` (no copies, no TCP).
-   **User requirement: FP16 accumulation** in the neural conv shaders (`vk/conv*.comp`,
-   cooperative-matrix path `conv_cm.comp`): f16 inputs/weights *and* f16 accumulators
-   (`VK_KHR_shader_float16_int8`, `shaderFloat16`; for coop matrix, a `float16_t` C/result type,
-   which needs a cmprops entry with f16 accumulate: `vk/cmprops` lists what the 3080 supports).
-   Log at startup which accumulator type is active, and fall back to f32 only if the driver lacks
-   it. Compare output against the f32 path (PSNR, or max error on a test frame) so the speedup does
-   not cost visible quality. Check:
-   the neural pass changes the picture as on Linux, and how much it costs in ms per frame (log it).
+5. **Launcher hardening** (`openraven/setup_windows.ps1`, `start_linux.sh` step 2):
+   - Check free disk space before extracting (~11 GB) and say so plainly.
+   - Packs with renamed files (match game/halo.so by size + hash, not only by name) and archives
+     inside archives.
+   - v3.11 .7z pack has no halo.so: make the "still needed" message point at that case clearly.
+   - Optional: create a desktop shortcut after the first successful run.
 
-6. **Test a full round.** From attract: START (Enter or pad Start) -> character select -> mission.
-   Shoot (Space/RT), reload (R/RB), grenade (G/LT), aim with sticks/arrows, die -> continue
-   countdown -> game over. Test with a real XInput pad too (the user's 8BitDo/Xbox). Fix every FATAL /
-   crash on the way (still open: C++ exceptions untested; aligned_alloc > 16, __realpath_chk,
-   /proc/meminfo, /sys/class/dmi/id/*; LAPACK, 20 functions). Run 15+ minutes with no crash.
+6. **Quality checks still open:** FSR 2 quality mode vs a Linux `gfxshot.sh` frame (sharpness,
+   ghosting); frame-gen pacing with PresentMon (shown FPS doubles, even pacing); HDR AutoHDR look on
+   the user's 1000-nit screen (highlights now reach the chosen peak; paper white fixed at 203).
 
-7. **Tune the user's settings: 60 FPS with neural rendering ON, looking as good as possible**
-   (RTX 3080, 4K screen). Start from the current `graphics.ini` (FSR 2, 4096 shadows, 4 splits, SSR
-   1.0, SSAO, aniso 16, ENHANCED_BLOOM must stay 0). With neural on, measure frame time in the
-   heaviest scene of a round. If it is under 60, trade in this order: FSR_QUALITY native -> quality,
-   SHADOW_SPLITS 4 -> 3, SSR_BUFFER_SCALE 1.0 -> 0.75, then frame gen as the last resort. Save the
-   result in `openraven/graphics.ini` and write in the comments which values were measured.
+7. **Release housekeeping:** a GitHub Release zip (prebuilt, no git needed); README/LICENSE notes for
+   the shipped binaries (libstdc++/libgcc_s: GCC runtime exception; Linux FMOD in `extralibs/`: FMOD
+   license); remove the unused `render_t` warning in ravenfg.c; delete the obsolete
+   `flicker_test_compose.bat` in the game folder.
 
-8. **Tell the user where to launch it.** Right now (dev build): from the game folder
-   `F:\Halo Fireteam Raven (3.11)(2018)[Raw Thrills][TP]`, run `openraven\win\ravenloader.exe .`
-   (Git Bash: `./openraven/win/ravenloader.exe .`). Before the GitHub release, add a double-click
-   launcher at the folder root, `start_windows.bat` (replacing the WSL one), that runs
-   `openraven\win\ravenloader.exe "%~dp0"` with the usual settings. Then tell the user: double-click
-   `start_windows.bat` in the game folder (and make a desktop shortcut if they want one).
-
-9. **Upload the new Windows version to GitHub** (`wuzzy450/OpenRaven`, local copy `github_staging/`,
-   last commit `53ca067` is the WSL version). Ask the user before pushing. Steps:
-   - Copy in `openraven/win/` sources + Makefile + a **prebuilt `ravenloader.exe`** (users don't
-     compile), the new `start_windows.bat`, ported gfx/audio files, `graphics.ini`.
-     Never commit game files (`pm/`, `3.11-dec/`, zips, FMOD DLLs if their license forbids it:
-     then the launcher must find them in the user's own files, or tell the user where to get them).
-   - Remove the WSL path: `windows_setup.ps1`, `play_halo_win.sh`, the WSL steps in README.
-   - README: new Windows section (requirements: Windows 10/11 x64, OpenGL 4.x GPU driver; steps:
-     unzip game, put OpenRaven in it, double-click `start_windows.bat`; keyboard + pad controls;
-     graphics.ini / F1 overlay; troubleshooting = send `ravenloader.log`). Leave the Linux section.
-   - Commit on a branch, push, open a PR (or push to main if the user says so).
+8. **Later: Linux HDR.** Not possible on X11/GLX. Would need a Vulkan/Wayland present path
+   (gamescope, `VK_EXT_hdr_metadata`), which fits with the Vulkan work in step 1.
 
 ## Loader design (what exists)
 

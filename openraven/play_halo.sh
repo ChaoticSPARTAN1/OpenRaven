@@ -5,7 +5,12 @@ set -e
 OUT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="$(dirname "$OUT")"
 
+# The launcher puts the v3.11 game + halo.so it found in your archives into openraven/3.11-dec: prefer those.
+DEC="$OUT/3.11-dec/pm/g7/halo"
+if [ -z "$HALO_GAME" ] && [ -f "$DEC/game" ]; then HALO_GAME="$DEC/game"; fi
 HALO_GAME="${HALO_GAME:-$WS/pm/g7/halo/game}"
+HALOSO_BIND=()
+[ -f "$DEC/halo.so" ] && HALOSO_BIND=(--ro-bind "$DEC/halo.so" /pm/g7/halo/halo.so)
 if [ ! -f "$HALO_GAME" ]; then
   echo "Error: game files not found in $WS/pm/g7/halo/. Run ./start_linux.sh from the root folder first." >&2
   exit 1
@@ -115,6 +120,7 @@ bwrap --tmpfs / \
   --ro-bind "$OUT/extralibs" /pm/g7/extralibs \
   --ro-bind-try "$WS/pm/g7/halo/eFileMaps" /eFileMaps \
   --bind "$WS/pm/g7/dump" /pm/g7/dump \
+  "${HALOSO_BIND[@]}" \
   --ro-bind "$OUT/rio2pad.so" /pm/g7/rio2pad.so \
   --ro-bind "$ASOUND_CONF" /pm/g7/home/.asoundrc \
   --ro-bind "$OUT/ravengfx.so" /pm/g7/ravengfx.so \

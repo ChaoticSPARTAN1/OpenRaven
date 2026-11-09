@@ -99,7 +99,8 @@ static int tw, th;                           // copy size (window)
 static int have_prev, have_scene, scene_frame;
 static GLuint vel_tex, dep_tex; static int vel_w, vel_h, have_vel;
 static GLuint win_prog; static int win_draws, captured;
-static GLint u_vs, u_A, u_B, u_F, u_V, u_D, u_t, u_kb, u_hasA, u_hasV, u_dbg, u_vres, u_hud;
+static GLint u_vs, u_A, u_B, u_F, u_V, u_D, u_t, u_kb, u_hasA, u_hasV, u_dbg, u_vres, u_hud, u_cmax;
+int ravenhdr_on(void);   // graphics.ini HDR = 1: the frame is float and may go above 1.0
 static long frames;
 static double now_s(void);
 static double last_real_t, real_dt = 1.0 / 60, last_swap_t;
@@ -152,6 +153,7 @@ static const char *fs_src =
 "uniform sampler2D A, B, F, V, D;\n"     // scene A (older), scene B (newer), finished B, velocity, depth
 "uniform float t, kb, vs;\n"                 // t = time of the generated frame (A=0, B=1); kb = 1-t
 "uniform int hasA, hasV, dbg, hud;\n"
+"uniform float cmax;\n"   // 1.0, or a large value under native HDR (keep highlights above SDR white)
 "uniform vec2 vres;\n"                   // velocity/depth texture size
 "in vec2 uv; out vec4 o;\n"
 "vec3 vd(vec2 p){ ivec2 q = ivec2(clamp(p, vec2(0.0), vec2(0.99999)) * vres); return vec3(texelFetch(V, q, 0).xy * vs, texelFetch(D, q, 0).r); }\n"
@@ -195,7 +197,7 @@ static const char *fs_src =
 "  if (hud != 0) {\n"                                              // lay the HUD of B over it, unmoved
 "    vec3 f = texture(F, uv).rgb, s = texture(B, uv).rgb, d = f - s;\n"
 "    float m = smoothstep(0.03, 0.25, max(max(abs(d.r), abs(d.g)), abs(d.b)));\n"
-"    col = mix(clamp(col + d, 0.0, 1.0), f, m);\n"
+"    col = mix(clamp(col + d, 0.0, cmax), f, m);\n"
 "  }\n"
 "  if (dbg != 0) {\n"
 "    vec2 e = min(uv, 1.0 - uv) * vec2(textureSize(B, 0));\n"
@@ -266,6 +268,7 @@ static int init_gl(void)
     u_V = gGetUniformLocation(prog, "V"); u_D = gGetUniformLocation(prog, "D"); u_t = gGetUniformLocation(prog, "t");
     u_kb = gGetUniformLocation(prog, "kb"); u_hasA = gGetUniformLocation(prog, "hasA"); u_hasV = gGetUniformLocation(prog, "hasV");
     u_dbg = gGetUniformLocation(prog, "dbg"); u_vres = gGetUniformLocation(prog, "vres"); u_hud = gGetUniformLocation(prog, "hud"); u_vs = gGetUniformLocation(prog, "vs");
+    u_cmax = gGetUniformLocation(prog, "cmax");
     GLint ov; gGetIntegerv(0x85B5, &ov); gGenVertexArrays(1, &vao); gBindVertexArray(ov);
     GLint rf, df; gGetIntegerv(0x8CAA, &rf); gGetIntegerv(0x8CA6, &df);
     gGenFramebuffers(1, &fbo_rd); gGenFramebuffers(1, &fbo_wr);
@@ -288,7 +291,8 @@ static void read_settings(void)
     { const char *nn = ravengfx_get("NEURAL"), *ns = ravengfx_get("NEURAL_STRENGTH"); if (getenv("RAVENNN")) nn = getenv("RAVENNN");
       nn_on = nn && atoi(nn) > 0; nn_str = ns ? atof(ns) : 1.0f;
       const char *nst = ravengfx_get("NEURAL_STABLE"); nn_stable_set = nst ? atof(nst) : 0.6f;
-      const char *npr = ravengfx_get("NEURAL_PROTECT"); nn_protect = npr && *npr ? atof(npr) : -1.0f; }   // -1 = what the network was trained with (NN_PROT) eval_mode = getenv("RAVENFG_EVAL") != NULL; force_all = getenv("RAVENFG_FORCE") != NULL;
+      const char *npr = ravengfx_get("NEURAL_PROTECT"); nn_protect = npr && *npr ? atof(npr) : -1.0f; }   // -1 = what the network was trained with (NN_PROT)
+    eval_mode = getenv("RAVENFG_EVAL") != NULL; force_all = getenv("RAVENFG_FORCE") != NULL;
 }
 int ravenfg_wanted(void) { read_settings(); return 1; }   // wrappers are always useful (live toggle)
 
@@ -332,7 +336,8 @@ static void ensure_tex(GLuint *t, int w, int h)
     if (*t) return;
     GLint ot; gGetIntegerv(0x8069, &ot);
     gGenTextures(1, t); gBindTexture(0x0DE1, *t);
-    gTexImage2D(0x0DE1, 0, 0x8058, w, h, 0, 0x1908, 0x1401, NULL);   // RGBA8
+    if (ravenhdr_on()) gTexImage2D(0x0DE1, 0, 0x881A, w, h, 0, 0x1908, 0x140B, NULL);   // RGBA16F: native HDR, keep highlights
+    else gTexImage2D(0x0DE1, 0, 0x8058, w, h, 0, 0x1908, 0x1401, NULL);   // RGBA8
     gTexParameteri(0x0DE1, 0x2801, 0x2601); gTexParameteri(0x0DE1, 0x2800, 0x2601);
     gTexParameteri(0x0DE1, 0x2802, 0x812F); gTexParameteri(0x0DE1, 0x2803, 0x812F);
     gTexParameteri(0x0DE1, 0x813D, 0);
@@ -484,7 +489,7 @@ static void draw_generated_ab(GLuint a, float t, int use_vel)
     gUniform1i(u_A, 0); gUniform1i(u_B, 1); gUniform1i(u_F, 2); gUniform1i(u_V, 3); gUniform1i(u_D, 4);
     gUniform1f(u_t, t); gUniform1f(u_kb, 1 - t); gUniform1f(u_vs, vscale);
     gUniform1i(u_hasA, have_prev && !mode_extra); gUniform1i(u_hasV, use_vel); gUniform1i(u_dbg, dbg);
-    gUniform1i(u_hud, have_scene); gUniform2f(u_vres, (float)vel_w, (float)vel_h);
+    gUniform1i(u_hud, have_scene); gUniform1f(u_cmax, ravenhdr_on() ? 65000.0f : 1.0f);gUniform2f(u_vres, (float)vel_w, (float)vel_h);
     gDrawArrays(0x0004, 0, 3);
 }
 

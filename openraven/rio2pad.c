@@ -138,6 +138,11 @@ static void gun_aim(int g, float *x, float *y)
 }
 
 static int btn(int p, int b) { return g_pads[p].fd != -1 && g_pads[p].btn[b]; }
+// Keyboard (game window focused, F1 menu closed), same keys as Windows: Enter/1 = P1 START,
+// 2 = P2 START, F2 = TEST, Space = P1 fire, R = P1 reload, G = P1 grenade, arrows = P1 aim.
+enum { KB_START1 = 1, KB_START2 = 2, KB_TEST = 4, KB_FIRE = 8, KB_RELOAD = 16, KB_GRENADE = 32,
+       KB_LEFT = 64, KB_RIGHT = 128, KB_UP = 256, KB_DOWN = 512 };
+static volatile int g_kb;
 
 static int g_skipboot;
 static time_t g_t_start;
@@ -165,7 +170,7 @@ static int boot_start_pulse(void)
 static int start_pressed(int p)
 {
     if (p == 0 && g_autostart && (time(NULL) & 1) && !(g_probe_n && time(NULL) >= g_probe_t0)) return 1;
-    return btn(p, PAD_START);
+    return btn(p, PAD_START) || (p == 0 && (g_kb & KB_START1)) || (p == 1 && (g_kb & KB_START2));
 }
 
 // RT: xpad reports it as axis 5 (-32767 released .. 32767 full); some modes give button 9/11 instead.
@@ -185,7 +190,7 @@ static int in_continue(int p)
 static int trigger_pressed(int p)
 {
     static int block[MAX_PADS];
-    int down = (g_pads[p].fd != -1 && g_pads[p].axis[5] > 0) || (p == 0 && g_mouse_btn[0]);
+    int down = (g_pads[p].fd != -1 && g_pads[p].axis[5] > 0) || (p == 0 && (g_mouse_btn[0] || (g_kb & KB_FIRE)));
     if (getenv("RIO2PAD_CONTINUESHOOT")) return down;
     if (in_continue(p)) { block[p] = 1; return 0; }
     if (block[p] && down) return 0;   // still held from the countdown
@@ -197,7 +202,7 @@ static int test_pressed(void)
 {
     for (int p = 0; p < MAX_PADS; p++)
         if (btn(p, PAD_BACK)) return 1;
-    return 0;
+    return !!(g_kb & KB_TEST);
 }
 
 static void *sw_get_hook(int id)
@@ -230,8 +235,8 @@ static void *sw_get_hook(int id)
         int p = (id - 793) / 5, k = (id - 793) % 5;
         pressed = 0;
         if (k == 2) pressed = trigger_pressed(p);                                       // RT
-        if (k == 3) pressed = btn(p, PAD_RB) || (p == 0 && g_mouse_btn[2]);            // RB / right click = reload
-        if (k == 4) pressed = (g_pads[p].fd != -1 && g_pads[p].axis[2] > 0) || (p == 0 && g_mouse_btn[1]);   // LT / middle = grenade
+        if (k == 3) pressed = btn(p, PAD_RB) || (p == 0 && (g_mouse_btn[2] || (g_kb & KB_RELOAD)));            // RB / right click = reload
+        if (k == 4) pressed = (g_pads[p].fd != -1 && g_pads[p].axis[2] > 0) || (p == 0 && (g_mouse_btn[1] || (g_kb & KB_GRENADE)));   // LT / middle = grenade
     }
     // Player START in the gun cabinet: the type-8 remap sends 581 -> logical 0x24e and 582 -> 0x251,
     // and the game reads "Player N Start" as logical 0x24e + slot (gun 2 is slot 3). Same switch
@@ -455,6 +460,8 @@ static struct {
     int (*prop)(void *, XID_, XID_, long, long, int, XID_, XID_ *, int *, unsigned long *, unsigned long *, unsigned char **);
     int (*xfree)(void *);
     int (*tree)(void *, XID_, XID_ *, XID_ *, XID_ **, unsigned *);
+    int (*keymap)(void *, char *);
+    unsigned char (*k2c)(void *, XID_);
 } X;
 
 static int x_init(void)
@@ -469,6 +476,7 @@ static int x_init(void)
     X.warp = dlsym(h, "XWarpPointer");          X.flush = dlsym(h, "XFlush");
     X.atom = dlsym(h, "XInternAtom");           X.prop = dlsym(h, "XGetWindowProperty");
     X.xfree = dlsym(h, "XFree");                X.tree = dlsym(h, "XQueryTree");
+    X.keymap = dlsym(h, "XQueryKeymap");        X.k2c = dlsym(h, "XKeysymToKeycode");
     if (!X.open || !X.focus || !X.query || !X.geom || !X.warp || !X.flush || !X.atom || !X.prop || !X.xfree || !X.tree) return 0;
     X.dpy = X.open(NULL);
     fprintf(stderr, "[rio2pad] mouse: %s\n", X.dpy ? "X11 connected" : "XOpenDisplay failed, mouse off");
@@ -540,6 +548,46 @@ static void poll_mouse(void)
     }
 }
 
+// Keyboard state through the same X11 connection (only when the focused window is the game's).
+static void poll_keys(void)
+{
+    static int (*ui_is_open)(void); static int ui_looked;
+    if (!ui_looked) { ui_looked = 1; ui_is_open = (int (*)(void))dlsym(RTLD_DEFAULT, "ravenui_is_open"); }
+    if (!x_init() || !X.keymap || !X.k2c || (ui_is_open && ui_is_open())) { g_kb = 0; return; }
+    XID_ w; int rev;
+    X.focus(X.dpy, &w, &rev);
+    if (w <= 1 || !x_ours(w)) { g_kb = 0; return; }
+    static const struct { XID_ sym; int bit; } map[] = {
+        {0xff0d, KB_START1}, {0xff8d, KB_START1}, {'1', KB_START1}, {'2', KB_START2}, {0xffbf, KB_TEST},
+        {' ', KB_FIRE}, {'r', KB_RELOAD}, {'g', KB_GRENADE},
+        {0xff51, KB_LEFT}, {0xff53, KB_RIGHT}, {0xff52, KB_UP}, {0xff54, KB_DOWN},
+    };
+    static unsigned char code[sizeof map / sizeof *map];
+    static int coded;
+    if (!coded) { coded = 1; for (unsigned i = 0; i < sizeof map / sizeof *map; i++) code[i] = X.k2c(X.dpy, map[i].sym); }
+    char km[32];
+    X.keymap(X.dpy, km);
+    int kb = 0;
+    for (unsigned i = 0; i < sizeof map / sizeof *map; i++)
+        if (code[i] && (km[code[i] >> 3] & (1 << (code[i] & 7)))) kb |= map[i].bit;
+    static int prev;
+    if (kb != prev && getenv("RIO2PAD_DEBUG")) fprintf(stderr, "[rio2pad] keys 0x%x\n", kb);
+    prev = kb;
+    g_kb = kb;
+    // arrows move P1's aim (about one screen width per second)
+    static long long last;
+    long long t = now_ms(); float dt = last ? (t - last) / 1000.0f : 0; last = t;
+    if (dt > 0.1f) dt = 0.1f;
+    if (kb & (KB_LEFT | KB_RIGHT | KB_UP | KB_DOWN)) {
+        g_mouse_owns = 1;
+        if (kb & KB_LEFT) g_aim[0][0] -= dt;
+        if (kb & KB_RIGHT) g_aim[0][0] += dt;
+        if (kb & KB_UP) g_aim[0][1] -= dt;
+        if (kb & KB_DOWN) g_aim[0][1] += dt;
+        for (int k = 0; k < 2; k++) { if (g_aim[0][k] < 0) g_aim[0][k] = 0; if (g_aim[0][k] > 1) g_aim[0][k] = 1; }
+    }
+}
+
 static void dump_swlog(void)
 {
     FILE *f = fopen(g_swlog, "w");
@@ -579,6 +627,7 @@ static void *pad_thread(void *arg)
         for (int p = 0; p < MAX_PADS; p++)
             if (g_pads[p].fd >= 0) { pfd[np].fd = g_pads[p].fd; pfd[np].events = POLLIN; map[np++] = p; }
         poll_mouse();
+        poll_keys();
         update_aim();
         if (poll(pfd, np, 4) <= 0) continue;
 

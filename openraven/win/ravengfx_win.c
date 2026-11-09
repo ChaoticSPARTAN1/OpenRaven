@@ -37,6 +37,7 @@ static FILE *keylog;
 static CRITICAL_SECTION loglock;
 char ravengfx_conf_path[MAX_PATH * 2];
 int ravengfx_win_w, ravengfx_win_h;
+int ravengfx_res_w, ravengfx_res_h;   // the game's screen size (-fWxH)
 float ravengfx_fg_fps;   // ravenfg.c: shown frames per second (real + generated)
 void ravengfx_capture(const char *path) { raven_log("[ravengfx] capture %s: not on Windows yet\n", path); }
 float ravengfx_fps;
@@ -355,6 +356,7 @@ int ravengfx_args(char **argv, int argc) {
         else { w = GetSystemMetrics(SM_CXSCREEN); h = GetSystemMetrics(SM_CYSCREEN); }
     }
     if (raven_env("RAVEN_WINDOWED") && !raven_env("RAVEN_RES")) w = 1280, h = 720;
+    ravengfx_res_w = w; ravengfx_res_h = h;
     snprintf(g_res_arg, sizeof g_res_arg, "-f%dx%d", w, h);
     argv[argc++] = g_res_arg;
     argv[argc++] = "-n";
@@ -368,6 +370,8 @@ void ravengfx_install(void) {
     if (conf && *conf) snprintf(ravengfx_conf_path, sizeof ravengfx_conf_path, "%s", conf);
     else snprintf(ravengfx_conf_path, sizeof ravengfx_conf_path, "%s/openraven/graphics.ini", g_root);
     load_conf(ravengfx_conf_path);
+    extern void display_detect(const char *);
+    display_detect(ravengfx_conf_path);  // first launch only (autodetect = 1): HDR on/off + peak nits
     extern void ravenfsr_config(void);
     ravenfsr_config();  // UPSCALER = fsr2: sets RENDER_SCALE from FSR_QUALITY, forces TAA on, SMAA/FXAA off
     const char *kl = raven_env("RAVENGFX_KEYLOG");

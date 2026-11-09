@@ -1,7 +1,7 @@
-// HDR10 output for the Windows build (graphics.ini HDR = 1, live from the F1 overlay).
-// Same idea as Community Shaders' "HDR Display" (HDROutputCS.hlsl): the game's SDR picture is
-// gamma-decoded (2.2), optionally widened by Pumbo AutoHDR (highlights toward the display's peak),
-// scaled so SDR white = paper-white nits, converted BT.709 -> BT.2020 and PQ-encoded.
+// Native HDR10 output for the Windows build (graphics.ini HDR = 1, restart to switch).
+// The game draws into a 16-bit float screen framebuffer (gl_hooks.c) and keeps its own highlights
+// above 1.0. Here the picture is gamma-decoded (2.2), capped at the display peak, scaled so
+// 1.0 = paper-white nits, converted BT.709 -> BT.2020 and PQ-encoded.
 // OpenGL cannot present HDR10 itself, so once HDR is turned on we present through a DXGI flip
 // swapchain (R10G10B10A2, colour space G2084/P2020). GL draws into a D3D11 texture shared with
 // WGL_NV_DX_interop, D3D copies it to the back buffer and presents. Turning HDR off afterwards keeps
@@ -18,6 +18,9 @@
 #include "shim.h"
 
 void *gl_resolve(const char *name);
+extern int ravenhdr_float_fb;
+unsigned ravengl_screen_fbo(void);          // gl_hooks.c: the game's screen when native HDR is on, else 0
+void ravengl_screen_size(int *w, int *h);   // shim_glx.c: back buffer is RGBA16F, the game's tonemap keeps highlights
 const char *ravengfx_get(const char *key);
 
 #define WGL_ACCESS_WRITE_DISCARD_NV 0x0002
@@ -34,7 +37,7 @@ static ID3D11Texture2D *dtex; static HANDLE hdev, hobj;
 static GLuint gtex, srct, fb_src, fb_dst, prog, vao;
 static int W, H, cs_hdr = -1;
 static float out_peak = 1000;  // display peak from DXGI (nits)
-static int on, autohdr = 1, vsync = 1; static float paper = 203, peak = 0, satx = 0.2f;
+static int on, vsync = 1; static float paper = 203, peak = 0;
 
 #define GLF(ret, n, args) static ret (APIENTRY *n) args;
 GLF(void, gGenFramebuffers, (GLsizei, GLuint *)) GLF(void, gBindFramebuffer, (GLenum, GLuint))
@@ -52,22 +55,14 @@ GLF(void, gBindTexture, (GLenum, GLuint)) GLF(void, gTexImage2D, (GLenum, GLint,
 GLF(void, gTexParameteri, (GLenum, GLenum, GLint)) GLF(void, gGetIntegerv, (GLenum, GLint *))
 GLF(GLboolean, gIsEnabled, (GLenum)) GLF(void, gEnable, (GLenum)) GLF(void, gDisable, (GLenum))
 GLF(void, gViewport, (GLint, GLint, GLsizei, GLsizei)) GLF(void, gDrawArrays, (GLenum, GLint, GLsizei))
-GLF(void, gReadBuffer, (GLenum)) GLF(void, gColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))
+GLF(void, gReadBuffer, (GLenum)) GLF(void, gReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *)) GLF(void, gColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))
 
 static const char *vs = "#version 330 core\nvoid main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
 static const char *fs =
 "#version 330 core\n"
-"uniform sampler2D S; uniform int hdr, autohdr, h; uniform float paper, peak, sat;\n"
+"uniform sampler2D S; uniform int hdr, h; uniform float paper, peak;\n"
 "out vec4 o;\n"
 "float avg(vec3 c){ return (c.r + c.g + c.b) / 3.0; }\n"
-// Pumbo AutoHDR (github.com/Filoppi/PumboAutoHDR), as in Community Shaders DisplayMapping.hlsli
-"vec3 pumbo(vec3 c){\n"
-"  float mw = max(peak / paper, 1.0);\n"   // brightest SDR white -> the chosen peak (CS caps it at 500 nits)
-"  float r = avg(c); float tr = r + pow(clamp(r, 0.0, 1.0), 2.75) * (mw - 1.0);\n"
-"  float s1 = r > 0.0 ? tr / r : 1.0;\n"
-"  vec3 t3 = c + pow(clamp(c, 0.0, 1.0), vec3(2.75)) * (mw - 1.0);\n"
-"  vec3 s3 = vec3(c.r > 0.0 ? t3.r / c.r : 1.0, c.g > 0.0 ? t3.g / c.g : 1.0, c.b > 0.0 ? t3.b / c.b : 1.0);\n"
-"  return c * mix(vec3(s1), s3, sat); }\n"
 "vec3 pq(vec3 c){ const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;\n"
 "  vec3 y = pow(max(c, 0.0), vec3(m1)); return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3(m2)); }\n"
 "void main(){\n"
@@ -75,7 +70,7 @@ static const char *fs =
 "  vec3 c = texelFetch(S, q, 0).rgb;\n"
 "  if (hdr == 0) { o = vec4(c, 1.0); return; }\n"
 "  vec3 L = pow(max(c, 0.0), vec3(2.2));\n"
-"  if (autohdr != 0) L = pumbo(L);\n"
+"  L = min(L, vec3(max(peak / paper, 1.0)));\n"   // the game's own highlights (1.0 = paper white), up to the peak
 "  L = mat3(0.627402, 0.069095, 0.016394, 0.329292, 0.919544, 0.088028, 0.043306, 0.011360, 0.895578) * L;\n"
 "  o = vec4(clamp(pq(L * paper / 10000.0), 0.0, 1.0), 1.0);\n"
 "}\n";
@@ -86,8 +81,6 @@ static void read_settings(void) {
     on = e && atoi(e) > 0;
     v = ravengfx_get("HDR_PAPERWHITE"); paper = v && atof(v) >= 40 ? (float)atof(v) : 203;
     v = ravengfx_get("HDR_PEAK"); peak = v ? (float)atof(v) : 0;
-    v = ravengfx_get("HDR_AUTOHDR"); autohdr = v ? atoi(v) > 0 : 1;
-    v = ravengfx_get("HDR_SATURATION"); satx = v ? (float)atof(v) : 0.2f;
     v = ravengfx_get("VSYNC"); vsync = !v || strcmp(v, "0") != 0;
 }
 
@@ -101,6 +94,7 @@ static int load_gl(void) {
     L(gUniform1f, "glUniform1f") L(gGenVertexArrays, "glGenVertexArrays") L(gBindVertexArray, "glBindVertexArray")
     L(gActiveTexture, "glActiveTexture") L(gBindSampler, "glBindSampler") L(gGenTextures, "glGenTextures")
     L(gDeleteTextures, "glDeleteTextures") L(gBindTexture, "glBindTexture") L(gTexImage2D, "glTexImage2D")
+    gReadPixels = (__typeof__(gReadPixels))gl_resolve("glReadPixels");
     L(gTexParameteri, "glTexParameteri") L(gGetIntegerv, "glGetIntegerv") L(gIsEnabled, "glIsEnabled")
     L(gEnable, "glEnable") L(gDisable, "glDisable") L(gViewport, "glViewport") L(gDrawArrays, "glDrawArrays")
     L(gReadBuffer, "glReadBuffer") L(gColorMask, "glColorMask")
@@ -144,7 +138,7 @@ static int make_target(int w, int h) {
     if (!hobj) { raven_log("[hdr] wglDXRegisterObjectNV failed (%lu)\n", GetLastError()); return 0; }
     GLint ot; gGetIntegerv(GL_TEXTURE_BINDING_2D, &ot);
     gGenTextures(1, &srct); gBindTexture(GL_TEXTURE_2D, srct);
-    gTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    gTexImage2D(GL_TEXTURE_2D, 0, ravenhdr_float_fb ? GL_RGBA16F : GL_RGBA8, w, h, 0, GL_RGBA, ravenhdr_float_fb ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, NULL);
     gTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); gTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     gTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     gBindTexture(GL_TEXTURE_2D, ot);
@@ -189,8 +183,25 @@ static void set_colorspace(int hdr) {
     raven_log("[hdr] output %s%s\n", hdr ? "HDR10 (PQ, BT.2020)" : "SDR", FAILED(r) ? " - SetColorSpace1 failed" : "");
 }
 
+static int present(HWND hw);
 // Called instead of SwapBuffers. Returns 1 when it presented, 0 = caller does SwapBuffers as before.
+// If the game draws into the native-HDR screen framebuffer but we cannot present (no HDR path),
+// copy it to the window first so plain SwapBuffers still shows the picture.
 int ravenhdr_present(HWND hw) {
+    if (present(hw)) return 1;
+    unsigned sfb = ravengl_screen_fbo();
+    if (sfb && gBlitFramebuffer) {
+        GLint rf, df, sc_on = gIsEnabled(GL_SCISSOR_TEST); int sw, sh;
+        gGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rf); gGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &df);
+        ravengl_screen_size(&sw, &sh); gDisable(GL_SCISSOR_TEST);
+        gBindFramebuffer(GL_READ_FRAMEBUFFER, sfb); gBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        gBlitFramebuffer(0, 0, sw, sh, 0, 0, sw, sh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        gBindFramebuffer(GL_READ_FRAMEBUFFER, rf); gBindFramebuffer(GL_DRAW_FRAMEBUFFER, df);
+        if (sc_on) gEnable(GL_SCISSOR_TEST);
+    }
+    return 0;
+}
+static int present(HWND hw) {
     static int n;
     if (n++ % 30 == 0) read_settings();
     if (st < 0 || (!st && !on)) return 0;
@@ -211,11 +222,36 @@ int ravenhdr_present(HWND hw) {
     gGetIntegerv(GL_VIEWPORT, vp);
     static const GLenum caps[] = {GL_SCISSOR_TEST, GL_BLEND, GL_DEPTH_TEST, GL_CULL_FACE, GL_STENCIL_TEST, GL_FRAMEBUFFER_SRGB, GL_RASTERIZER_DISCARD};
     GLboolean en[7]; for (int i = 0; i < 7; i++) { en[i] = gIsEnabled(caps[i]); gDisable(caps[i]); }
-    // back buffer -> srct
-    gBindFramebuffer(GL_READ_FRAMEBUFFER, 0); gGetIntegerv(GL_READ_BUFFER, &rb); gReadBuffer(GL_BACK);
+    // the game's picture -> srct: from the native-HDR screen framebuffer, else the window's back buffer
+    unsigned sfb = ravengl_screen_fbo();
+    int sw = w, sh = h;
+    if (sfb) ravengl_screen_size(&sw, &sh);
+    gBindFramebuffer(GL_READ_FRAMEBUFFER, sfb); gGetIntegerv(GL_READ_BUFFER, &rb); gReadBuffer(sfb ? GL_COLOR_ATTACHMENT0 : GL_BACK);
     gBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb_src); gFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srct, 0);
-    gBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    gBlitFramebuffer(0, 0, sw, sh, 0, 0, sw, sh, GL_COLOR_BUFFER_BIT, GL_NEAREST);   // same place as on the window
     gReadBuffer(rb);
+    // graphics.ini HDR_STATS = 1: every 300 frames log the brightest pixel in 64 full-width rows and how
+    // many go above SDR white (1.0 = paper white), i.e. the highlights SDR would clip.
+    static int fr, stats = -1;
+    if (stats < 0) { const char *v = ravengfx_get("HDR_STATS"); stats = v && atoi(v) > 0; }
+    if (stats && ravenhdr_float_fb && gReadPixels && ++fr % 300 == 0 && w <= 8192) {
+        static float *row; if (!row) row = malloc(sizeof(float) * 4 * 8192);
+        float mx = 0; long over = 0, tot = 0;
+        gBindFramebuffer(GL_READ_FRAMEBUFFER, fb_src);
+        gFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srct, 0);
+        for (int y = 0; y < 64; y++) {
+            gReadPixels(0, h * y / 64 + h / 128, w, 1, GL_RGBA, GL_FLOAT, row);
+            for (int x = 0; x < w; x++) {
+                float m = fmaxf(row[x * 4], fmaxf(row[x * 4 + 1], row[x * 4 + 2]));
+                if (m > mx) mx = m;
+                if (m > 1.001f) over++;
+                tot++;
+            }
+        }
+        gFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        raven_log("[hdr] frame %d: brightest %.2fx white (~%.0f nits), %.2f%% of pixels above SDR white\n",
+                  fr, mx, powf(mx, 2.2f) * paper, tot ? 100.0 * over / tot : 0.0);
+    }
     // srct -> shared D3D texture through the shader
     wDXLock(hdev, 1, &hobj);
     gBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb_dst); gFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gtex, 0);
@@ -223,10 +259,9 @@ int ravenhdr_present(HWND hw) {
     gUseProgram(prog); gBindVertexArray(vao);
     gActiveTexture(GL_TEXTURE0); gGetIntegerv(GL_TEXTURE_BINDING_2D, &t0); gBindSampler(0, 0); gBindTexture(GL_TEXTURE_2D, srct);
     gUniform1i(gGetUniformLocation(prog, "S"), 0); gUniform1i(gGetUniformLocation(prog, "hdr"), hdr);
-    gUniform1i(gGetUniformLocation(prog, "autohdr"), autohdr); gUniform1i(gGetUniformLocation(prog, "h"), h);
+    gUniform1i(gGetUniformLocation(prog, "h"), h);
     gUniform1f(gGetUniformLocation(prog, "paper"), paper);
     gUniform1f(gGetUniformLocation(prog, "peak"), peak > 0 ? peak : out_peak);
-    gUniform1f(gGetUniformLocation(prog, "sat"), satx);
     gDrawArrays(GL_TRIANGLES, 0, 3);
     gFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
     wDXUnlock(hdev, 1, &hobj);

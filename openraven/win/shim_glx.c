@@ -101,8 +101,47 @@ static void *g_dpy_seen;
 
 typedef HGLRC (WINAPI *create_attribs_fn)(HDC, HGLRC, const int *);
 
+// Native HDR (graphics.ini HDR = 1): a 16-bit float back buffer, so the game's
+// tonemap (rewritten in gl_hooks.c) can keep highlights above SDR white. ravenhdr_win.c reads it.
+int ravenhdr_float_fb;
+const char *ravengfx_get(const char *key);
+typedef BOOL (WINAPI *choose_pf_fn)(HDC, const int *, const FLOAT *, UINT, int *, UINT *);
+static int float_pixel_format(HDC dc) {
+    const char *h = ravengfx_get("HDR");
+    if (!h || atoi(h) <= 0) return 0;
+    // wglChoosePixelFormatARB needs a current context, and a window's pixel format can only be set
+    // once, so use a throwaway window for that.
+    HWND tw = CreateWindowA("STATIC", "", WS_POPUP, 0, 0, 1, 1, NULL, NULL, NULL, NULL);
+    HDC tdc = tw ? GetDC(tw) : NULL;
+    if (!tdc) return 0;
+    PIXELFORMATDESCRIPTOR tp = {sizeof tp, 1, PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER, PFD_TYPE_RGBA, 32};
+    SetPixelFormat(tdc, ChoosePixelFormat(tdc, &tp), &tp);
+    HGLRC trc = wglCreateContext(tdc), prc = wglGetCurrentContext(); HDC pdc = wglGetCurrentDC();
+    int pf = 0; UINT cnt = 0;
+    if (trc && wglMakeCurrent(tdc, trc)) {
+        choose_pf_fn f = (choose_pf_fn)(void *)wglGetProcAddress("wglChoosePixelFormatARB");
+        const int at[] = {0x2001, 1, 0x2010, 1, 0x2011, g_cfg.dbl ? 1 : 0,   // draw to window, GL, double buffer
+                          0x2013, 0x21A0,                                    // pixel type RGBA float
+                          0x2015, 16, 0x2017, 16, 0x2019, 16, 0x201B, 16,    // R G B A 16
+                          0x2022, g_cfg.depth, 0x2023, g_cfg.stencil, 0};
+        if (f && (!f(tdc, at, NULL, 1, &pf, &cnt) || !cnt)) pf = 0;
+        wglMakeCurrent(pdc, prc);
+    }
+    if (trc) wglDeleteContext(trc);
+    ReleaseDC(tw, tdc); DestroyWindow(tw);
+    PIXELFORMATDESCRIPTOR pfd;
+    if (!pf || !DescribePixelFormat(dc, pf, sizeof pfd, &pfd) || !SetPixelFormat(dc, pf, &pfd)) {
+        raven_log("[hdr] no 16-bit float window format (%d), HDR highlights will clip at SDR white\n", pf);
+        return 0;
+    }
+    raven_log("[hdr] 16-bit float back buffer (pixel format %d) for native HDR\n", pf);
+    ravenhdr_float_fb = 1;
+    return 1;
+}
+
 static void set_pixel_format(HDC dc) {
     if (GetPixelFormat(dc)) return;
+    if (float_pixel_format(dc)) return;
     PIXELFORMATDESCRIPTOR pfd = {sizeof pfd, 1};
     pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | (g_cfg.dbl ? PFD_DOUBLEBUFFER : 0);
     pfd.iPixelType = PFD_TYPE_RGBA;
@@ -290,7 +329,7 @@ static void present_scaled(uint64_t draw, int ww, int wh) {
         int prb = 0;
         geti(0x8CA7, &prb);                               // GL_RENDERBUFFER_BINDING
         bindrb(0x8D41, rb);                               // GL_RENDERBUFFER
-        rbstorage(0x8D41, 0x8058, gw, gh);                // GL_RGBA8
+        rbstorage(0x8D41, ravenhdr_float_fb ? 0x881A : 0x8058, gw, gh);   // RGBA16F for native HDR (keeps highlights), else RGBA8
         bindrb(0x8D41, (unsigned)prb);
         int pd = 0;
         geti(0x8CA6, &pd);                                // GL_DRAW_FRAMEBUFFER_BINDING

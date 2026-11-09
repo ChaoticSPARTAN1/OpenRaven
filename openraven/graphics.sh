@@ -28,3 +28,65 @@ for v in RAVENGFX_UISCRIPT RAVENGFX_UIKEY RAVENGFX_NOUI; do
 done
 # VSync: NVIDIA's driver-level switch too, so the game's own swap-interval calls can't turn it off.
 case "$(gfx VSYNC 0)" in 1) GFX_BWRAP+=(--setenv __GL_SYNC_TO_VBLANK 1);; 0) GFX_BWRAP+=(--setenv __GL_SYNC_TO_VBLANK 0);; esac
+
+# First launch (autodetect = 1): is HDR on for the desktop, and how bright is the screen? Saves HDR,
+# HDR_PEAK (when the EDID says) and autodetect = 0 to graphics.ini, like display_detect_win.c on Windows.
+gfx_set() { # gfx_set key value: replace the key in graphics.ini, or add it
+  if grep -q "^[[:space:]]*$1[[:space:]]*=" "$GFX_INI"; then sed -i "s|^[[:space:]]*$1[[:space:]]*=.*|$1 = $2|" "$GFX_INI"; else echo "$1 = $2" >> "$GFX_INI"; fi
+}
+if [ "$(gfx autodetect 0)" = 1 ]; then
+  DET_HDR=0 DET_PEAK=
+  # KDE Plasma 6: kscreen-doctor lists each output's HDR state
+  if command -v kscreen-doctor >/dev/null && command -v python3 >/dev/null; then
+    DET_HDR=$(kscreen-doctor -j 2>/dev/null | python3 -I -c 'import json,sys
+try: o=[o for o in json.load(sys.stdin)["outputs"] if o.get("enabled")]
+except Exception: o=[]
+o.sort(key=lambda o: o.get("priority", 99)); print(1 if o and o[0].get("hdr") else 0)' 2>/dev/null || echo 0)
+  fi
+  # peak from the EDID (CTA-861 HDR static metadata: max luminance code L, nits = 50 * 2^(L/32))
+  if command -v python3 >/dev/null; then
+    DET_PEAK=$(python3 -I - <<'PY' 2>/dev/null
+import glob
+def peak(e):
+    for b in range(128, len(e) - 127, 128):
+        if e[b] != 2: continue
+        i = b + 4
+        while i < b + e[b + 2]:
+            tag, ln = e[i] >> 5, e[i] & 31
+            if tag == 7 and ln >= 4 and e[i + 1] == 6 and e[i + 4]: return round(50 * 2 ** (e[i + 4] / 32))
+            i += 1 + ln
+    return 0
+for f in sorted(glob.glob('/sys/class/drm/card*-*/edid')):
+    try:
+        if open(f[:-4] + 'status').read().strip() != 'connected': continue
+        p = peak(open(f, 'rb').read())
+        if p: print(p); break
+    except Exception: pass
+PY
+)
+  fi
+  MSG="[detect] desktop HDR $([ "$DET_HDR" = 1 ] && echo on || echo off)"
+  gfx_set HDR "$DET_HDR"
+  if [ -n "$DET_PEAK" ] && [ "$DET_PEAK" -gt 100 ] 2>/dev/null; then
+    # round to the nearest F1 menu choice
+    best=1000; bd=999999; for c in 400 600 800 1000 1500 2000 4000; do d=$(( c > DET_PEAK ? c - DET_PEAK : DET_PEAK - c )); [ $d -lt $bd ] && bd=$d best=$c; done
+    gfx_set HDR_PEAK "$best"; MSG="$MSG, peak $DET_PEAK nits -> HDR_PEAK = $best"
+  else MSG="$MSG, peak not in the EDID (HDR_PEAK stays $(gfx HDR_PEAK 1000))"; fi
+  gfx_set autodetect 0
+  echo "$MSG -> HDR = $DET_HDR (saved to graphics.ini)"
+fi
+
+# Native HDR on Linux: an X11 window only gets HDR10 output inside gamescope, so HDR = 1 runs the game
+# in a fullscreen HDR gamescope (ravenhdr.c presents HDR10 through Vulkan there). Without gamescope the
+# game shows in SDR. HALO_NO_GAMESCOPE=1 skips it.
+HDR_WRAP=()
+if [ "$(gfx HDR 0)" = 1 ] && [ -z "$HALO_NO_GAMESCOPE" ] && [ -z "$GAMESCOPE_WAYLAND_DISPLAY" ] && [ -n "$WAYLAND_DISPLAY" ]; then
+  if command -v gamescope >/dev/null; then
+    HDR_WRAP=(gamescope --hdr-enabled -f)
+    HZ=$(xrandr 2>/dev/null | awk '/\*/{for(i=2;i<=NF;i++) if ($i ~ /\*/) {gsub(/[*+]/,"",$i); print int($i+0.5); exit}}')
+    [ -n "$HZ" ] && HDR_WRAP+=(-r "$HZ")
+    HDR_WRAP+=(--)
+  else
+    echo "HDR = 1 but gamescope is not installed: the game shows in SDR (install gamescope for HDR10)." >&2
+  fi
+fi

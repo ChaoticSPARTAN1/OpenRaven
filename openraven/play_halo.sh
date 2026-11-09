@@ -103,7 +103,16 @@ fi
 # Everything the game and our hooks print goes to run_logs/last_play.log (screen changes included).
 export RIO2PAD_INPUTLOG="${RIO2PAD_INPUTLOG:-$OUT/run_logs/input.log}"
 REAL_PM="$(readlink -f "$WS/pm" 2>/dev/null || true)"
-bwrap --tmpfs / \
+# The X display: the desktop's, or (HDR in gamescope) gamescope's own, which only exists inside it,
+# so then bwrap keeps the DISPLAY that gamescope gives it.
+DISPLAY_ENV=(--setenv DISPLAY "${DISPLAY:-:0}" --setenv WAYLAND_DISPLAY "${WAYLAND_DISPLAY:-}")
+[ ${#HDR_WRAP[@]} -gt 0 ] && DISPLAY_ENV=()
+# HDR = 1 (graphics.sh): run inside gamescope at the game's resolution
+if [ ${#HDR_WRAP[@]} -gt 0 ]; then
+  HDR_WRAP=("${HDR_WRAP[@]:0:${#HDR_WRAP[@]}-1}" -w "${RES%x*}" -h "${RES#*x}" -- env ENABLE_GAMESCOPE_WSI=1)
+  echo "HDR: starting the game in gamescope (${HDR_WRAP[*]})"
+fi
+"${HDR_WRAP[@]}" bwrap --tmpfs / \
   --ro-bind /usr /usr --ro-bind /etc /etc \
   --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin --symlink usr/sbin /sbin \
   --proc /proc --dev-bind /dev /dev --ro-bind /sys /sys \
@@ -140,9 +149,8 @@ bwrap --tmpfs / \
   --setenv MESA_GLTHREAD "${MESA_GLTHREAD:-true}" \
   ${MESA_D3D12_DEFAULT_ADAPTER_NAME:+--setenv MESA_D3D12_DEFAULT_ADAPTER_NAME "$MESA_D3D12_DEFAULT_ADAPTER_NAME"} \
   ${HALO_FULLSCREEN:+--setenv HALO_FULLSCREEN "$HALO_FULLSCREEN"} \
-  --setenv DISPLAY "${DISPLAY:-:0}" \
-  --setenv WAYLAND_DISPLAY "${WAYLAND_DISPLAY:-}" \
-  --setenv PULSE_SERVER "${PULSE_SERVER:-}" \
+  "${DISPLAY_ENV[@]}" \
+  ${PULSE_SERVER:+--setenv PULSE_SERVER "$PULSE_SERVER"} \
   --setenv XAUTHORITY "${XAUTHORITY:-}" \
   --setenv XDG_RUNTIME_DIR "/run/user/$(id -u)" \
   --setenv LD_BIND_NOW 1 \

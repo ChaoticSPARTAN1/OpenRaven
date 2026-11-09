@@ -9,8 +9,6 @@
 *Halo: Fireteam Raven* (Raw Thrills / Play Mechanix / 343 Industries, 2018) is a four-player arcade rail shooter that only ever ran on arcade cabinets. OpenRaven runs the original v3.11 cabinet game on a normal PC with a controller or keyboard, in any resolution, with modern graphics options on top.
 
 > **You need your own copy of the game.** No game files are included here. OpenRaven works with a v3.11 game archive (about 6 GB, as `.zip`, `.7z` or `.rar`). Setup recognises the files by their contents, so file names and folder layout don't matter.
->
-> The v3.11 **.7z** pack has the game data but not the program file `halo.so`. If you only have that one, setup asks for a second archive with `game` + `halo.so` (for example a full v3.11 zip, or a `3.11-dec` pack).
 
 ---
 

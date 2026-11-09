@@ -26,7 +26,9 @@
 - **Frame generation** (2x / 3x / 4x). Only fills refresh slots your screen can show, so it never lowers the game's own frame rate.
 - **Native HDR10 on Windows and Linux**: the game's own highlights (fire, sun, muzzle flashes) are kept in 16-bit float instead of being cut off at white, up to your screen's peak brightness. Display resolution, refresh rate, HDR and peak brightness are detected on first launch. On Linux, HDR needs HDR turned on in the desktop (KDE Plasma 6) and `gamescope` installed; the game then runs inside gamescope.
 - **In-game settings menu (F1).** Change everything live while you play.
-- **Neural detail pass** *(experimental, Linux only for now)*. A small neural network that restores texture and face detail.
+- **Neural detail pass** *(experimental, Windows and Linux, needs a Vulkan GPU)*. A small neural network that restores texture and face detail. It costs about 8 ms per frame at 4K on an RTX 3080.
+
+Frame generation and the neural pass both work with HDR on.
 
 Out of the box it uses maximum quality, native resolution, and FSR 2 as anti-aliasing, at 60 FPS like the arcade machine.
 

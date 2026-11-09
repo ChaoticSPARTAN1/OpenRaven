@@ -95,6 +95,13 @@ R(glBindTexture, void, (GLenum, GLuint))
 R(glActiveTexture, void, (GLenum))
 R(glClearColor, void, (float, float, float, float))
 R(glClearBufferfv, void, (GLenum, GLint, const float *))
+R(glTexParameteri, void, (GLenum, GLenum, GLint))
+R(glTexParameterf, void, (GLenum, GLenum, float))
+R(glTexParameteriv, void, (GLenum, GLenum, const GLint *))
+R(glTexParameterfv, void, (GLenum, GLenum, const float *))
+R(glDeleteTextures, void, (GLsizei, const GLuint *))
+R(glTexImage2D, void, (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *))
+R(glCompressedTexImage2D, void, (GLenum, GLint, GLenum, GLsizei, GLsizei, GLint, GLsizei, const void *))
 
 static void seg_end(void){ if (tracing && ndraw_seg) fprintf(stderr, "[gltrace]   ... %ld draws\n", ndraw_seg); ndraw_seg = 0; }
 static void w_glBindFramebuffer(GLenum t, GLuint f){
@@ -161,12 +168,43 @@ static void w_glBindTexture(GLenum t, GLuint x){
     if (tracing) { GLint w = 0, h = 0, f = 0; if (x) { q_texlevel(x, 0, 0x1000, &w); q_texlevel(x, 0, 0x1001, &h); q_texlevel(x, 0, 0x1003, &f); }
         fprintf(stderr, "[gltrace]   tex unit %u <- %u (%dx%d 0x%x)\n", cur_unit - 0x84C0, x, w, h, f); } }
 
+// HUD/menu sprites (the Ramos/Lang JOIN portraits): the engine leaves them on GL_REPEAT, and their
+// bottom row is opaque, so the top edge of the quad blends that row in = a 1 px line above the head
+// (plain game too). Same fix as win/gl_hooks.c: textures with an alpha format get clamp-to-edge right
+// after upload, unless the engine set a wrap mode on that texture first. RAVEN_SPRITECLAMP=0 = off.
+#define MAXTEX 65536
+static unsigned char tex_flags[MAXTEX];   // 2 = engine set a wrap mode
+static int sprite_clamp(void){ static int on = -1; if (on < 0) { const char *e = getenv("RAVEN_SPRITECLAMP"); on = !(e && *e == '0'); } return on; }
+static GLuint bound2d(void){ unsigned u = cur_unit ? cur_unit - 0x84C0 : 0; return u < 32 ? unit_tex[u] : 0; }
+static void note_wrap(GLenum t, GLenum p){ GLuint x = bound2d(); if (t == 0x0DE1 && (p == 0x2802 || p == 0x2803) && x && x < MAXTEX) tex_flags[x] |= 2; }
+static void w_glTexParameteri(GLenum t, GLenum p, GLint v){ note_wrap(t, p); r_glTexParameteri(t, p, v); }
+static void w_glTexParameterf(GLenum t, GLenum p, float v){ note_wrap(t, p); r_glTexParameterf(t, p, v); }
+static void w_glTexParameteriv(GLenum t, GLenum p, const GLint *v){ note_wrap(t, p); r_glTexParameteriv(t, p, v); }
+static void w_glTexParameterfv(GLenum t, GLenum p, const float *v){ note_wrap(t, p); r_glTexParameterfv(t, p, v); }
+static void sprite_uploaded(GLenum t, GLint l, int alpha){
+    GLuint x = bound2d();
+    if (t != 0x0DE1 || l != 0 || !alpha || !x || x >= MAXTEX || (tex_flags[x] & 2) || !sprite_clamp()) return;
+    static void (*tp)(GLenum, GLenum, GLint); if (!tp) tp = gpa("glTexParameteri");
+    tp(0x0DE1, 0x2802, 0x812F); tp(0x0DE1, 0x2803, 0x812F);
+}
+static void w_glDeleteTextures(GLsizei n, const GLuint *ids){ for (GLsizei i = 0; ids && i < n; i++) if (ids[i] < MAXTEX) tex_flags[ids[i]] = 0; r_glDeleteTextures(n, ids); }
+static void w_glTexImage2D(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, const void *p){
+    r_glTexImage2D(t, l, i, w, h, b, f, ty, p);
+    sprite_uploaded(t, l, f == 0x1908 || f == 0x80E1 || f == 0x190A || f == 0x1906);
+}
+static void w_glCompressedTexImage2D(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b, GLsizei sz, const void *p){
+    r_glCompressedTexImage2D(t, l, f, w, h, b, sz, p);
+    sprite_uploaded(t, l, f == 0x83F1 || f == 0x83F2 || f == 0x83F3 || f == 0x8E8C || f == 0x8E8D || f == 0x8C4D || f == 0x8C4E || f == 0x8C4F);
+}
+
 struct ent { const char *n; void **real; void *wrap; };
 #define E(name) { #name, (void **)&r_##name, (void *)w_##name }
 static struct ent ents[] = {
     E(glBindFramebuffer), E(glUseProgram), E(glUniformMatrix4fv), E(glUniform1i), E(glDrawElements),
     E(glDrawArrays), E(glDrawElementsInstanced), E(glDrawRangeElements), E(glBlitFramebuffer),
     E(glClear), E(glViewport), E(glDrawBuffers), E(glBindTexture), E(glActiveTexture), E(glClearColor), E(glClearBufferfv),
+    E(glTexParameteri), E(glTexParameterf), E(glTexParameteriv), E(glTexParameterfv), E(glDeleteTextures),
+    E(glTexImage2D), E(glCompressedTexImage2D),
 };
 
 static double trace_at = -1; static int installed, done;
@@ -177,7 +215,7 @@ void ravengl_trace_frame(double t)     // called from the present hook, before t
         installed = 1;
         const char *e = getenv("RAVENGFX_GLTRACE");
         fsr = ravenfsr_wanted(); fg = !getenv("RAVENGFX_NOGLHOOK") && ravenfg_wanted();
-        if (!e && !fsr && !fg) return;
+        if (!e && !fsr && !fg && !sprite_clamp()) return;
         trace_at = e ? atof(e) : -1;
         q_fbattach = gpa("glGetNamedFramebufferAttachmentParameteriv"); q_texlevel = gpa("glGetTextureLevelParameteriv");
         q_rbparam = gpa("glGetNamedRenderbufferParameteriv"); q_progiv = gpa("glGetProgramiv");

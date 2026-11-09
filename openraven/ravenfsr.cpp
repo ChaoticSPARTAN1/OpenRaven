@@ -374,9 +374,18 @@ static void guard_check(void)
             unmap(0x88EB);
             double si = sat[0] / 144, so = sat[1] / 144;
             bool bad_now = si > 6.0 / 255 && so < 0.6 * si;
-            if (bad_now) taa_hold = 1800;
-            if (bad_now) { if (!fsr_bad) fprintf(stderr, "[ravenfsr] guard: FSR output lost its colour (%.3f vs input %.3f), showing TAA\n", so, si); fsr_bad = true; good = 0; }
-            else if (fsr_bad && ++good >= 300) { fsr_bad = false; fprintf(stderr, "[ravenfsr] guard: FSR output fine again\n"); }
+            // Each relapse doubles how long we stay on TAA (30 s, 1 min, 2 min ... up to 30 min at 60 FPS):
+            // the first few frames of every trip are seen dull (the readback is 2+ frames late), so
+            // flipping back to FSR every 300 frames showed up as repeated desaturation flashes.
+            static int trips, stay;
+            if (bad_now) {
+                if (!fsr_bad) {
+                    trips++; stay = 1800 << (trips - 1 < 5 ? trips - 1 : 5);
+                    fprintf(stderr, "[ravenfsr] guard: FSR output lost its colour (%.3f vs input %.3f), showing TAA for %d frames (trip %d)\n", so, si, stay, trips);
+                }
+                fsr_bad = true; good = 0; taa_hold = stay;
+            }
+            else if (fsr_bad && ++good >= 300 && taa_hold <= 300) { fsr_bad = false; fprintf(stderr, "[ravenfsr] guard: FSR output fine again\n"); }
         }
         filled[s] = 0;
     }

@@ -200,9 +200,9 @@ if ! ready; then
     if ! have_dec; then
       if [ -n "$DATA_ONLY_PACK" ]; then
         echo "[OpenRaven] Got the game data from '$DATA_ONLY_PACK'. Still needed: the v3.11 game program (game + halo.so); that archive doesn't have it (the v3.11 .7z pack never has halo.so)."
-        echo "[OpenRaven] Pick an archive that has them: the [TP] zip, or a 3.11-dec pack."
+        echo "[OpenRaven] Pick an archive that has them: a full v3.11 zip, or a 3.11-dec pack."
       else
-        echo "[OpenRaven] Still needed: the v3.11 game program (game + halo.so). None of the archives checked had it: pick the [TP] zip or a 3.11-dec pack."
+        echo "[OpenRaven] Still needed: the v3.11 game program (game + halo.so). None of the archives checked had it: pick a full v3.11 zip or a 3.11-dec pack."
       fi
     fi
     picked=$(pick_archive)

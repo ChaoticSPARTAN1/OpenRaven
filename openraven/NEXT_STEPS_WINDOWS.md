@@ -278,17 +278,23 @@ A. **Mouse controls, Windows and Linux: mouse moves the aim, left click fires.**
    controls section of README.
 
 B. **One-pixel horizontal lines above the Ramos / Lang HUD sprites next to "JOIN".** New: a 1 px line
-   runs across the full width of each character sprite, right above it. Likely a texture-edge sampling
-   issue from our changes (anisotropy 16 / LOD bias, FSR 2 upscaling the HUD, or the neural/frame-gen HUD
-   copy). Check by toggling one at a time: UPSCALER off, ANISOTROPY_LEVEL 8 (default), NEURAL 0,
-   FRAME_GEN off, RENDER_SCALE 1.0. Then check Linux too. Fix is likely clamp-to-edge on the sprite's
-   texture, or keeping the HUD out of the upscaled/neural path.
+   runs across the full width of each character sprite, right above it. **User thinks this is an engine
+   bug, not a setting** (2026-11-08). So first confirm on the plain game: no graphics.ini (arcade
+   defaults, our passes off), on Windows and Linux. If it is still there, it is the engine: find the
+   sprite's draw (`ravengltrace.c` / GL hooks), check its texture coords and wrap mode (a sprite sheet
+   sampled with GL_REPEAT or a UV that touches the row above bleeds a 1 px line), and fix it in our GL
+   layer (force clamp-to-edge or nudge the UV half a texel for that texture). Only if the plain game is
+   clean: toggle our settings one at a time (UPSCALER, ANISOTROPY_LEVEL 8, NEURAL, FRAME_GEN).
 
 C. **Attract scene with Lang and Ramos standing side by side (between the score screens): player models
-   flicker in and out of saturation/vibrancy.** Check which pass causes it: TAA/FSR 2 history
-   (reactive mask, exposure), neural pass (temporal smoothing NEURAL_STABLE), frame gen, HDR tonemap,
-   SSAO/SSR. Toggle each and record with `RAVENFG_SHOT` / `RAVEN_SHOT_EVERY` on that scene. See also the
-   2026-11-08 "flicker hunt" notes above.
+   flicker in and out of saturation/vibrancy.** **User thinks this is an engine bug, not a setting.**
+   Same approach: confirm on the plain game first (no graphics.ini, Windows and Linux), recording the
+   scene with `RAVEN_SHOT_EVERY`. If it is the engine: likely candidates are its auto-exposure / color
+   grading toggling between two states, or a lighting/material uniform that flips between frames (two
+   render paths alternating). Trace that scene's draws with `ravengltrace.c` on a "vibrant" and a "dull"
+   frame and diff the shader uniforms / bound LUT textures, then pin the value in our GL layer. Only if
+   the plain game is clean: toggle our passes (FSR 2/TAA history, neural NEURAL_STABLE, frame gen, HDR).
+   See also the 2026-11-08 "flicker hunt" notes above.
 
 1. **Neural rendering on Windows: Vulkan, in-process, FP16 accumulation (user's top priority).**
    Ship only the v9 network (v8 fine-tuned on smooth tiles, see NEXT_STEPS_LINUX_V9.md): `neural/raven_nn_weights.h` (= `raven_nn9_weights.h`,

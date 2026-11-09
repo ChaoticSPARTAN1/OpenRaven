@@ -260,6 +260,36 @@ F1 overlay port, FSR 2, frame generation (never lowers real FPS), HDR10, one-cli
 Each step: build, run, check `ravenloader.log`, update this file. Never save scripted UI tests into
 the user's `openraven/graphics.ini` (see "Default settings for new players").
 
+Done 2026-11-08 (later): v9 network shipped (PR #2), Windows neural pass on GitHub (PR #3), fp16/fp32
+accumulate autotune per layer + `NEURAL_ACCUMULATE = auto|fp16|fp32` (PR #4; the user's 3080 has the
+gpu-unlock tool, so fp32 is as fast there), Enhanced bloom removed from F1 (PR #5), Linux ravengfx.so
+rebuilt in WSL (PR #6, GLIBC 2.38, not run in game on Linux yet).
+
+### New tasks from the user (2026-11-08), do these first
+
+A. **Mouse controls, Windows and Linux: mouse moves the aim, left click fires.**
+   The game reads the cabinet guns/sticks as joystick input (`rio2pad.c` on Linux skips mouse devices on
+   purpose; Windows: `win/rio2pad_win.c`). Windows already turns mouse messages into X11 events
+   (`win/shim_x11.c` WM_MOUSEMOVE / WM_LBUTTONDOWN), but nothing maps them to the aim/fire inputs.
+   Plan: in the pad layer, feed mouse position (relative to the window, scaled to the aim range) into
+   player 1's aim axes and left button into fire (same input the right trigger uses). Linux: read the
+   pointer from the game's X11 events or `/dev/input` mice. Keep gamepads working; mouse only drives
+   player 1 and only when moved. Add an F1 option (Mouse aim on/off + sensitivity) and the keyboard
+   controls section of README.
+
+B. **One-pixel horizontal lines above the Ramos / Lang HUD sprites next to "JOIN".** New: a 1 px line
+   runs across the full width of each character sprite, right above it. Likely a texture-edge sampling
+   issue from our changes (anisotropy 16 / LOD bias, FSR 2 upscaling the HUD, or the neural/frame-gen HUD
+   copy). Check by toggling one at a time: UPSCALER off, ANISOTROPY_LEVEL 8 (default), NEURAL 0,
+   FRAME_GEN off, RENDER_SCALE 1.0. Then check Linux too. Fix is likely clamp-to-edge on the sprite's
+   texture, or keeping the HUD out of the upscaled/neural path.
+
+C. **Attract scene with Lang and Ramos standing side by side (between the score screens): player models
+   flicker in and out of saturation/vibrancy.** Check which pass causes it: TAA/FSR 2 history
+   (reactive mask, exposure), neural pass (temporal smoothing NEURAL_STABLE), frame gen, HDR tonemap,
+   SSAO/SSR. Toggle each and record with `RAVENFG_SHOT` / `RAVEN_SHOT_EVERY` on that scene. See also the
+   2026-11-08 "flicker hunt" notes above.
+
 1. **Neural rendering on Windows: Vulkan, in-process, FP16 accumulation (user's top priority).**
    Ship only the v9 network (v8 fine-tuned on smooth tiles, see NEXT_STEPS_LINUX_V9.md): `neural/raven_nn_weights.h` (= `raven_nn9_weights.h`,
    sha256 3288eed6...). No other weights in the repo.

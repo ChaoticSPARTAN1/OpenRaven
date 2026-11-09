@@ -4,9 +4,6 @@
 
 The game runs on custom Linux x86_64 PC-based hardware inside original cabinets. OpenRaven emulates the proprietary Sentinel HASP security dongle and watchdog systems, allowing the game to boot natively under standard Linux distributions (like Ubuntu, SteamOS, Batocera) or under Windows 10/11 using **WSL2 (Windows Subsystem for Linux 2)** with full GPU acceleration (WSLg).
 
-> **This install (2026-11-04):** see **`RUNNING_ON_PC.md`** for how to run it on a Linux PC with
-> gamepads (`./play_halo.sh`), and **`NEXT_STEPS.md`** for the current plan (settings overlay, graphics).
-
 ---
 
 ## Features

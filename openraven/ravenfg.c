@@ -213,6 +213,23 @@ static GLuint shader(GLenum type, const char *src)
     return s;
 }
 
+unsigned ravengl_screen_fbo(void);   // the game's screen when native HDR is on, else 0 (the window)
+static void (*rBindFB)(GLenum, GLuint), (*rDrawBuf)(GLenum), (*rReadBuf)(GLenum);
+static int win_buf(GLenum b) { return b == 0x0405 || b == 0x0402 || b == 0x0404 || b == 0x0400 || b == 0x0408; }
+static void wBindFB(GLenum t, GLuint f) { rBindFB(t, f ? f : ravengl_screen_fbo()); }
+static GLenum map_buf(GLenum b, GLenum which) {
+    GLuint s = ravengl_screen_fbo(); if (!s || !win_buf(b)) return b;
+    GLint fb = 0; gGetIntegerv(which, &fb); return (GLuint)fb == s ? 0x8CE0 : b;
+}
+static void wDrawBuf(GLenum b) { rDrawBuf(map_buf(b, 0x8CA6)); }
+static void wReadBuf(GLenum b) { rReadBuf(map_buf(b, 0x8CAA)); }
+
+#ifndef _WIN32
+int ravenhdr_present(void);
+static void (*rxSwap)(void *, unsigned long);
+static void hdr_swap(void *d, unsigned long w) { if (!ravenhdr_present()) rxSwap(d, w); }
+#endif
+
 static int init_gl(void)
 {
 #define L(v, n) if (!(v = (__typeof__(v))gpa(n))) { fprintf(stderr, "[ravenfg] missing %s, frame generation off\n", n); return 0; }
@@ -234,8 +251,13 @@ static int init_gl(void)
     xSwap = w_swap; xDpy = w_dpy; xDrw = w_drw;
 #else
     L(xSwap, "glXSwapBuffers") L(xDpy, "glXGetCurrentDisplay") L(xDrw, "glXGetCurrentDrawable")
+    rxSwap = xSwap; xSwap = hdr_swap;   // generated frames go through the HDR10 presenter too
 #endif
 #undef L
+    // Native HDR: "the window" is the game's RGBA16F screen framebuffer (ravengl_screen_fbo), so frame
+    // generation and the neural pass read and write the same picture the HDR presenter shows.
+    rBindFB = gBindFramebuffer; gBindFramebuffer = wBindFB;
+    rDrawBuf = gDrawBuffer; gDrawBuffer = wDrawBuf; rReadBuf = gReadBuffer; gReadBuffer = wReadBuf;
     GLuint v = shader(0x8B31, vs_src), f = shader(0x8B30, fs_src);
     prog = gCreateProgram(); gAttachShader(prog, v); gAttachShader(prog, f); gLinkProgram(prog);
     GLint ok = 0; gGetProgramiv(prog, 0x8B82, &ok);

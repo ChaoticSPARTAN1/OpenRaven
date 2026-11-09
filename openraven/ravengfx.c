@@ -191,14 +191,17 @@ void ravenfg_request_shot(const char *base); void ravenfg_present(void (*real)(v
 static void capture(const char *path){
     int vp[4]; p_glGetIntegerv(0x0BA2, vp);   // GL_VIEWPORT is unreliable; use drawable size below
     int fbo=0; p_glGetIntegerv(0x8CA6, &fbo);  // GL_DRAW_FRAMEBUFFER_BINDING
-    if (p_glBindFramebuffer) p_glBindFramebuffer(0x8CA8, 0);  // read default framebuffer
+    int rfbo=0; p_glGetIntegerv(0x8CAA, &rfbo); int rbuf=0x0405; p_glGetIntegerv(0x0C02, &rbuf);
+    unsigned ravengl_screen_fbo(void); unsigned sfb = ravengl_screen_fbo();   // native HDR: the game's screen
+    if (p_glBindFramebuffer) p_glBindFramebuffer(0x8CA8, sfb);  // read the window (or its HDR stand-in)
     int w = vp[2], h = vp[3];
     if (ravengfx_win_w > 0) { w = ravengfx_win_w; h = ravengfx_win_h; }
     unsigned char *buf = malloc((size_t)w*h*3);
     if (!buf) return;
-    p_glReadBuffer(0x0405); p_glPixelStorei(0x0D05, 1);   // GL_BACK, GL_PACK_ALIGNMENT
+    p_glReadBuffer(sfb ? 0x8CE0 : 0x0405); p_glPixelStorei(0x0D05, 1);   // GL_BACK, GL_PACK_ALIGNMENT
     p_glReadPixels(0,0,w,h,0x1907,0x1401,buf);             // GL_RGB, GL_UNSIGNED_BYTE
-    if (p_glBindFramebuffer) p_glBindFramebuffer(0x8CA8, fbo);
+    (void)fbo; if (p_glBindFramebuffer) p_glBindFramebuffer(0x8CA8, rfbo);
+    p_glReadBuffer(rbuf);
     FILE *f = fopen(path,"wb");
     if (f) { fprintf(f,"P6\n%d %d\n255\n",w,h); for (int y=h-1;y>=0;y--) fwrite(buf+(size_t)y*w*3,1,(size_t)w*3,f); fclose(f); }
     free(buf);
@@ -447,6 +450,9 @@ static void try_set_fullscreen(void *cd_ptr, unsigned long cdr_win)
     }
 }
 
+// HDR = 1: ravenhdr.c presents through Vulkan HDR10 instead of the game's swap (else it falls back).
+int ravenhdr_present(void);
+static void present_or_hdr(void *ctx) { if (!ravenhdr_present()) ((void (*)(void *))PRESENT_FN)(ctx); }
 static void my_present(void *ctx)
 {
     my_swap(NULL, 0);                       // overlay + capture + FPS, before the real swap
@@ -481,7 +487,7 @@ static void my_present(void *ctx)
         next_t = (next_t > t - cap_dt ? next_t : t) + cap_dt;
     }
     double a = now_s();
-    ravenfg_present((void (*)(void *))PRESENT_FN, ctx);
+    ravenfg_present(present_or_hdr, ctx);
     double b = now_s();
     if (fpslog && tprev > 0) {             // where the frame time goes: inside present vs. the rest
         in_sum += b - a; out_sum += a - tprev;

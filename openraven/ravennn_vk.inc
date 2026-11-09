@@ -7,6 +7,7 @@
 // semaphores (Linux: GL_EXT_memory_object_fd / semaphore_fd; Windows: the _win32 versions), else host staging.
 // NEURAL_BACKEND = auto | plain | matrix (restart): auto = matrix cores when present (+ autotune per layer).
 #include "vk/ravenvk.h"
+int ravenhdr_on(void);   // graphics.ini HDR = 1: the frame is float and may go above 1.0
 
 static int nn_ok = -1; static float nn_stable = 0.6f;
 static GLuint nn_prog_final, nn_fb[2], nn_in, nn_pin, nn_res[2], nn_out, nn_full;
@@ -57,7 +58,7 @@ static void gen_final(void)
        "  float busy = textureLod(RF, (vec2(tq) + 0.5) / vec2(full), 3.0).a;\n"
        "  float k = 1.0 - prot * clamp((busy - %.6f) / %.6f, 0.0, 1.0);\n"   // dense patterns (grates): change less
        "  vec3 mg = %.6f * (hi - lo) * k + %.6f;\n"
-       "  oc = vec4(clamp(clamp(v + str * k * r, lo - mg, hi + mg), 0.0, 1.0), 1.0); orr = vec4(r, 1.0); }\n", NN_PB0, NN_PB1, NN_GM, NN_GA);
+       "  oc = vec4(clamp(clamp(v + str * k * r, lo - mg, hi + mg), 0.0, %s), 1.0); orr = vec4(r, 1.0); }\n", NN_PB0, NN_PB1, NN_GM, NN_GA, ravenhdr_on() ? "65000.0" : "1.0");
 }
 static GLuint nn_link(void)
 {
@@ -178,7 +179,7 @@ static void nn_resize(int w, int h)
     if (w == nn_w && h == nn_h_) return;
     if (nn_in) { gDeleteTextures(1, &nn_in); gDeleteTextures(1, &nn_pin); gDeleteTextures(2, nn_res); gDeleteTextures(1, &nn_out); gDeleteTextures(1, &nn_full); }
     // RGBA16F like the shared buffer, so the read-back into it is a plain copy (no 8-bit -> half conversion)
-    nn_tex(&nn_in, w, h, 0x881A, 0x1908, 0x140B); nn_tex(&nn_pin, w, h, 0x881A, 0x1908, 0x140B); nn_tex(&nn_out, w, h, 0x8058, 0x1908, 0x1401);
+    nn_tex(&nn_in, w, h, 0x881A, 0x1908, 0x140B); nn_tex(&nn_pin, w, h, 0x881A, 0x1908, 0x140B); nn_tex(&nn_out, w, h, ravenhdr_on() ? 0x881A : 0x8058, 0x1908, ravenhdr_on() ? 0x140B : 0x1401);   // native HDR: keep highlights
     nn_tex(&nn_res[0], w, h, 0x881A, 0x1908, 0x140B); nn_tex(&nn_res[1], w, h, 0x881A, 0x1908, 0x140B);
     // full-res residual (+ contrast in alpha) with mip levels 0..4 (level 4 = the 16x16 mean, 3 = 8x8)
     gGenTextures(1, &nn_full); gBindTexture(0x0DE1, nn_full);

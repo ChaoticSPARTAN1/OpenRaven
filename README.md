@@ -24,7 +24,7 @@
 - **Better graphics than the cabinet.** Up to 16x texture filtering, 8192 shadow maps with 4 cascades, full-resolution reflections and SSAO.
 - **AMD FSR 2**, as anti-aliasing at native resolution or as an upscaler for slower GPUs.
 - **Frame generation** (2x / 3x / 4x). Only fills refresh slots your screen can show, so it never lowers the game's own frame rate.
-- **HDR10 on Windows**, with highlights (sky, explosions, lights) expanded up to your screen's peak brightness.
+- **Native HDR10 on Windows and Linux**: the game's own highlights (fire, sun, muzzle flashes) are kept in 16-bit float instead of being cut off at white, up to your screen's peak brightness. Display resolution, refresh rate, HDR and peak brightness are detected on first launch. On Linux, HDR needs HDR turned on in the desktop (KDE Plasma 6) and `gamescope` installed; the game then runs inside gamescope.
 - **In-game settings menu (F1).** Change everything live while you play.
 - **Neural detail pass** *(experimental, Linux only for now)*. A small neural network that restores texture and face detail.
 
@@ -87,7 +87,7 @@ move it and gives it back when you push a stick. In the F1 menu (Input), **Mouse
 
 Press **F1** in game. Use the mouse, or the arrow keys, Tab, Enter (save) and Esc (close).
 
-- **Display:** resolution, VSync, FPS cap, aspect fix, field of view, FPS counter, HDR on/off and your screen's peak brightness *(Windows; turn on "Use HDR" in Windows display settings first)*.
+- **Display:** resolution, VSync, FPS cap, aspect fix, field of view, FPS counter, HDR on/off, peak brightness, paper white and highlight strength *(applies after a restart; Windows: turn on "Use HDR" in display settings first; Linux: HDR on in the desktop + gamescope)*.
 - **Upscaling:** FSR 2 mode (native, quality, balanced, performance, ultra performance) and sharpness.
 - **Frame generation:** off / 2x / 3x / 4x, interpolate or extrapolate.
 - **Quality:** texture filtering, shadow resolution and cascades, stable shadows, reflections, SSAO, bloom, glow, lens flare.
@@ -121,7 +121,8 @@ The cabinet runs a 64-bit Linux game with a Raw Thrills I/O board, IR light guns
 | `openraven/ravenui.c`, `openraven/win/ravenui_win.c` | F1 settings menu |
 | `openraven/ravenfsr.cpp`, `openraven/fsr2/` | FSR 2 (OpenGL) |
 | `openraven/ravenfg.c` | Frame generation |
-| `openraven/win/ravenhdr_win.c` | HDR10 output |
+| `openraven/win/ravenhdr_win.c` | HDR10 output (Windows) |
+| `openraven/ravenhdr.c` | HDR10 output (Linux, Vulkan) |
 | `openraven/ravennn*.inc`, `openraven/vk/`, `openraven/neural/` | Neural detail pass (Vulkan) |
 
 ### Building from source
@@ -137,7 +138,6 @@ Prebuilt files are included, so you only need this if you change the code.
 
 - **Wuzzy450**: creator ([Ko-fi](https://ko-fi.com/wuzzy450) · [Discord](https://discord.gg/nuvpXycag8))
 - **AMD FidelityFX FSR 2**, and **JuanDiegoMontoya**'s MIT-licensed OpenGL port of it (`openraven/fsr2/`)
-- **Pumbo** (Filoppi): the AutoHDR curve used for HDR highlights
 
 ## License
 

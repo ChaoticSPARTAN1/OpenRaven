@@ -47,6 +47,10 @@ static item_t items[] = {
  {"Display","Aspect fix (Hor+)","HOR_PLUS",T_CHOICE,1,"0|1",0,0,0,"1","Correct proportions on any screen shape"},
  {"Display","Field of view","FOV_SCALE",T_NUM,1,NULL,0.8f,1.4f,0.05f,"1","1 = arcade view. Higher = wider"},
  {"Display","Show FPS","show_fps",T_CHOICE,1,"0|1",0,0,0,"0","FPS counter in the corner"},
+ {"Display","HDR","HDR",T_CHOICE,0,"0|1",0,0,0,"0","Native HDR10: the game's own highlights, kept in 16-bit float. Needs HDR on in the desktop's display settings (KDE Plasma 6) and the vk-hdr-layer"},
+ {"Display","HDR peak brightness","HDR_PEAK",T_CHOICE,0,"400|600|800|1000|1500|2000|4000",0,0,0,"1000","Your screen's peak brightness in nits (set on first launch from the display; or your screen's spec sheet). Highlights never go above this"},
+ {"Display","HDR paper white","HDR_PAPERWHITE",T_CHOICE,0,"80|100|150|203|250|300",0,0,0,"203","Brightness of SDR white (menus, HUD, mid-tones) in nits. 203 = HDR standard; raise it in a bright room"},
+ {"Display","HDR highlights","HDR_HIGHLIGHTS",T_CHOICE,0,"0|0.25|0.5|0.75|1.0",0,0,0,"0.5","How far bright highlights (fire, sun, flashes) go above SDR white. 0.5 = the game's own filmic curve, 0 = SDR look, lower = softer"},
  {"Upscaling","Upscaler","UPSCALER",T_CHOICE,0,"off|fsr2",0,0,0,"off","FSR 2: temporal upscaling + AA (any GPU, GL 4.6)"},
  {"Upscaling","FSR 2 mode","FSR_QUALITY",T_CHOICE,0,"native|quality|balanced|performance|ultra",0,0,0,"quality","Render size: native 100%, quality 67%, balanced 59%, performance 50%, ultra 33%"},
  {"Upscaling","FSR 2 sharpness","FSR_SHARPNESS",T_NUM,1,NULL,0,1,0.05f,"0.3","0 = off. Live"},
@@ -641,7 +645,8 @@ static void draw_image(int sw, int sh, int x, int y, float scale)
     unsigned char en[8];
     for (int i = 0; i < 8; i++) en[i] = glIsEnabled_(caps[i]);   // blend depth cull scissor stencil srgb msaa progsize
 
-    glBindFramebuffer_(0x8CA9, 0);   // GL_DRAW_FRAMEBUFFER: the window
+    extern unsigned ravengl_screen_fbo(void);   // ravengltrace.c: the game's screen when native HDR is on, else 0
+    glBindFramebuffer_(0x8CA9, ravengl_screen_fbo());   // GL_DRAW_FRAMEBUFFER: the window (or its native-HDR stand-in)
     glViewport_(0, 0, sw, sh);
     for (int i = 0; i < 8; i++) glDisable_(caps[i]);
     glEnable_(0x0BE2);
